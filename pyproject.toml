@@ -46,12 +46,12 @@ test = [
     "qiskit-mitigation[basetest]",
 ]
 style = [
-    "ruff==0.14.7",
+    "ruff==0.16.5",
     "nbqa>=1.8.5",
 ]
 lint = [
     "qiskit-mitigation[style]",
-    "mypy==1.19.0",
+    "mypy==2.3.1",
     "pylint==4.0.4",
 ]
 notebook-dependencies = [
@@ -62,7 +62,7 @@ notebook-dependencies = [
 ]
 docs = [
     "qiskit-mitigation[notebook-dependencies]",
-    "qiskit-sphinx-theme~=2.0.0",
+    "qiskit-sphinx-theme~=2.1.0",
     # nbsphinx renders notebook cells with the ``ipython3`` Pygments lexer, which IPython provides.
     "ipython",
     "sphinx-copybutton",
