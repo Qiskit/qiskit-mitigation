@@ -50,7 +50,7 @@ doctest = [
     "pytest-doctestplus>=1.2.1",
 ]
 style = [
-    "ruff==0.14.7",
+    "ruff==0.16.5",
     "nbqa>=1.8.5",
 ]
 lint = [
