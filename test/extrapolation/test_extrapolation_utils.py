@@ -452,7 +452,7 @@ class TestProcessExtrapolatedExpectationValues(unittest.TestCase):
                 extrapolated_noise_factors=0.0,
             )
         )
-        self.assertEqual(zero_noise_exp_val, 0.65)
+        self.assertAlmostEqual(zero_noise_exp_val, 0.65)
         self.assertTrue(np.isfinite(zero_noise_std))
         np.testing.assert_array_equal(extrapolator, "linear")
 

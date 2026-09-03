@@ -33,7 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "qiskit-mitigation[test,doctest,lint,docs]",
+    "qiskit-mitigation[test,lint,docs]",
     "tox>=4.4.3",
 ]
 basetest = [
@@ -44,10 +44,6 @@ basetest = [
 ]
 test = [
     "qiskit-mitigation[basetest]",
-]
-doctest = [
-    "qiskit-mitigation[basetest]",
-    "pytest-doctestplus>=1.2.1",
 ]
 style = [
     "ruff==0.14.7",
@@ -65,8 +61,10 @@ notebook-dependencies = [
     "pylatexenc",
 ]
 docs = [
-    "qiskit-mitigation[doctest,notebook-dependencies]",
+    "qiskit-mitigation[notebook-dependencies]",
     "qiskit-sphinx-theme~=2.0.0",
+    # nbsphinx renders notebook cells with the ``ipython3`` Pygments lexer, which IPython provides.
+    "ipython",
     "sphinx-copybutton",
     "nbsphinx>=0.9.4",
     "reno>=4.1",

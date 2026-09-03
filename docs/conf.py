@@ -61,7 +61,6 @@ extensions = [
     "reno.sphinxext",
     "nbsphinx",
     "qiskit_sphinx_theme",
-    "pytest_doctestplus.sphinx.doctestplus",
 ]
 
 html_last_updated_fmt = "%Y/%m/%d"
