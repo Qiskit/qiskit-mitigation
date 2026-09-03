@@ -47,14 +47,6 @@ $ tox -e py310,py311,py312
 
 These environments execute all tests using [pytest], which supports its own simple style of tests, in addition to [unittest]-style tests.
 
-## Doctest environments
-
-The `doctest` environments use [doctest] to execute the code snippets that are embedded into the documentation strings. The tests get run using [pytest].
-
-```sh
-$ tox -e py310-doctest
-```
-
 ## Coverage environment
 
 The `coverage` environment uses [Coverage.py] to ensure that the fraction of code tested by pytest is above some threshold (enforced to be 100% for new modules).  A detailed, line-by-line coverage report can be viewed by navigating to `htmlcov/index.html` in a web browser.
@@ -93,7 +85,6 @@ $ tox -e docs-clean
 [pylint]: https://github.com/PyCQA/pylint
 [nbqa]: https://github.com/nbQA-dev/nbQA
 [Jupyter]: https://jupyter.org/
-[doctest]: https://docs.python.org/3/library/doctest.html
 [pytest]: https://docs.pytest.org/
 [unittest]: https://docs.python.org/3/library/unittest.html
 [Coverage.py]: https://coverage.readthedocs.io/

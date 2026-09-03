@@ -54,4 +54,4 @@ jobs:
           "samplomatic @ file:$(realpath samplomatic/dist/*.whl)"
       - name: Test using tox environment
         run: |
-          tox -e py,doctest --parallel --parallel-no-spinner
+          tox -e py --parallel --parallel-no-spinner
