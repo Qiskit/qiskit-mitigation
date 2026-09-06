@@ -544,5 +544,61 @@ class TestTrexFactorsEachTerm(unittest.TestCase):
         self.assertEqual(sorted(from_sequence), ["IZ", "ZI"])
 
 
+# ---------------------------------------------------------------------------
+# TREX._add_data_to_passthrough_data  (static method)
+# ---------------------------------------------------------------------------
+
+
+class TestAddDataToPassthroughData(unittest.TestCase):
+    """Tests for :meth:`TREX._add_data_to_passthrough_data`."""
+
+    def _mock_qp(self, passthrough_data):
+        """Return a mock QuantumProgram with the given passthrough_data."""
+        qp = MagicMock()
+        qp.passthrough_data = passthrough_data
+        return qp
+
+    def test_creates_passthrough_data_when_none(self):
+        """When ``passthrough_data`` is ``None``, it must be initialised with the data."""
+        data = {"mitigation": "trex", "version": "0.1"}
+        qp = self._mock_qp(None)
+        TREX._add_data_to_passthrough_data(data, qp)
+        self.assertEqual(qp.passthrough_data, {"qiskit_mitigation": [data]})
+
+    def test_creates_qiskit_mitigation_key_when_absent(self):
+        """When ``passthrough_data`` exists but lacks ``'qiskit_mitigation'``, the key must be added."""
+        data = {"mitigation": "trex", "version": "0.1"}
+        qp = self._mock_qp({"other_key": "value"})
+        TREX._add_data_to_passthrough_data(data, qp)
+        self.assertIn("qiskit_mitigation", qp.passthrough_data)
+        self.assertEqual(qp.passthrough_data["qiskit_mitigation"], [data])
+
+    def test_appends_when_qiskit_mitigation_key_exists(self):
+        """When ``'qiskit_mitigation'`` already exists, new data must be appended."""
+        existing = {"mitigation": "other", "version": "0.1"}
+        data = {"mitigation": "trex", "version": "0.1"}
+        qp = self._mock_qp({"qiskit_mitigation": [existing]})
+        TREX._add_data_to_passthrough_data(data, qp)
+        self.assertEqual(len(qp.passthrough_data["qiskit_mitigation"]), 2)
+        self.assertIn(data, qp.passthrough_data["qiskit_mitigation"])
+
+    def test_trex_calibration_flag_set_when_present(self):
+        """Entries that already have a non-None ``'trex_calibration'`` key must have it set to ``True``."""
+        existing = {"mitigation": "other", "trex_calibration": False}
+        data = {"mitigation": "trex", "version": "0.1"}
+        qp = self._mock_qp({"qiskit_mitigation": [existing]})
+        TREX._add_data_to_passthrough_data(data, qp)
+        # The pre-existing entry had trex_calibration set (non-None), so it should now be True
+        self.assertTrue(existing["trex_calibration"])
+
+    def test_trex_calibration_not_set_when_absent(self):
+        """Entries without ``'trex_calibration'`` key must not have it added."""
+        existing = {"mitigation": "other"}
+        data = {"mitigation": "trex", "version": "0.1"}
+        qp = self._mock_qp({"qiskit_mitigation": [existing]})
+        TREX._add_data_to_passthrough_data(data, qp)
+        self.assertNotIn("trex_calibration", existing)
+
+
 if __name__ == "__main__":
     unittest.main()
