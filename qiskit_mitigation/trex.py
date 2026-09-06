@@ -44,6 +44,8 @@ class TREX:
     mitigation tasks.
     """
 
+    VERSION = "0.1"
+
     def __init__(self):
         """Instantiate a TREX task."""
         self.tasks = []
@@ -104,11 +106,37 @@ class TREX:
         quantum_program.items.append(
             self._prepare_calibration_circuit(circuits, num_randomizations)
         )
+
+        data_for_passthrough = {
+            "version": self.VERSION,
+            "mitigation": "trex",
+            "program_item_index": self._program_item_index,
+        }
+
+        self._add_data_to_passthrough_data(data_for_passthrough, quantum_program)
         return quantum_program
 
     def has_calibration_result(self) -> bool:
         """Whether a TREX calibration task has been added to the quantum program."""
         return self._program_item_index is not None
+
+    @staticmethod
+    def _add_data_to_passthrough_data(
+        data: dict[str, Any], quantum_program: QuantumProgram
+    ) -> None:
+        """Add ``data`` into ``quantum_program`` passthrough_data."""
+        if quantum_program.passthrough_data is None:
+            quantum_program.passthrough_data = {"qiskit_mitigation": [data]}
+        else:
+            passthrough_data = quantum_program.passthrough_data
+            if "qiskit_mitigation" not in passthrough_data:
+                passthrough_data["qiskit_mitigation"] = [data]
+            else:
+                passthrough_data["qiskit_mitigation"].append(data)
+        qiskit_mitigation_passthrough = quantum_program.passthrough_data["qiskit_mitigation"]
+        for task_passthrough in qiskit_mitigation_passthrough:
+            if task_passthrough.get("trex_calibration", None) is not None:
+                task_passthrough["trex_calibration"] = True
 
     @staticmethod
     def _prepare_calibration_circuit(
