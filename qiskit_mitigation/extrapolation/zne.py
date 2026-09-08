@@ -893,7 +893,9 @@ class ZNE(MitigationTask):
         returned_extrapolated_exp_vals = (
             None if np.asarray(extrapolated_noise_factors).size == 0 else extrapolated_exp_vals
         )
-        returned_extrapolated_stds = None if np.asarray(extrapolated_noise_factors).size == 0 else extrapolated_stds
+        returned_extrapolated_stds = (
+            None if np.asarray(extrapolated_noise_factors).size == 0 else extrapolated_stds
+        )
 
         data_bin = DataBin(
             evs=zero_extrapolated_exp_vals,

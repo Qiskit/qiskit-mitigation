@@ -676,11 +676,7 @@ class PEC(MitigationTask):
                 f"``item_result['_meas']`` has ``{data.ndim}`` axes, expected ``4`` or ``5``."
             )
 
-        meas_flips = (
-            item_result["measurement_flips._meas"]
-            if "measurement_flips._meas" in item_result
-            else None
-        )
+        meas_flips = item_result.get("measurement_flips._meas", None)
         if isinstance(observables, ObservablesArray):
             observables = [
                 SparsePauliOp.from_sparse_observable(sparse_obs)
