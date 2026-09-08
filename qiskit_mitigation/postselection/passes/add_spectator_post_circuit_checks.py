@@ -11,7 +11,7 @@
 # that they have been altered from the originals.
 
 # Reminder: update the RST file in docs/apidocs when adding new interfaces.
-"""Transpiler pass to add post-circuit bit-flip checks on spectator qubits."""
+"""Transpiler pass to add post-circuit non-Markovian error checks on spectator qubits."""
 
 from __future__ import annotations
 
@@ -37,10 +37,10 @@ from ._utils import validate_op_is_supported
 from .x_pulse_type import XPulseType
 
 
-class AddSpectatorPostCircuitBitFlipChecks(TransformationPass):
-    r"""Add bit-flip checks at the end of the circuit on qubits adjacent to active qubits.
+class AddSpectatorPostCircuitNonMarkovianErrorChecks(TransformationPass):
+    r"""Add non-Markovian error checks at the end of the circuit on qubits adjacent to active qubits.
 
-    Each spectator qubit receives a post-circuit bit-flip check: a measurement, then a narrowband X-pulse
+    Each spectator qubit receives a post-circuit non-Markovian error check: a measurement, then a narrowband X-pulse
     that flips the qubit's state (:math:`|x\rangle\mapsto|x\oplus1\rangle`), then a second measurement.
     If the QPU fails to flip the qubit between the two measurements on a given shot, that sample may be
     considered unreliable and discarded. Postselecting only samples that pass all checks can improve the
@@ -99,7 +99,7 @@ class AddSpectatorPostCircuitBitFlipChecks(TransformationPass):
         )
         self.post_check_suffix = post_check_suffix
 
-        # Same pulse sequence as ``AddPostCircuitBitFlipChecks``: one full pi rotation.
+        # Same pulse sequence as ``AddPostCircuitNonMarkovianErrorChecks``: one full pi rotation.
         if self.x_pulse_type == XPulseType.XSLOW:
             self.pulse_sequence = [XSlowGate()]
         else:
@@ -140,7 +140,7 @@ class AddSpectatorPostCircuitBitFlipChecks(TransformationPass):
         )
 
         # Data qubits already carrying a post-check measurement (from
-        # ``AddPostCircuitBitFlipChecks``); when present we splice into its existing
+        # ``AddPostCircuitNonMarkovianErrorChecks``); when present we splice into its existing
         # barrier/pulse/barrier sandwich instead of building our own.
         data_with_postsel: set[Qubit] = set()
         for node in dag.topological_op_nodes():
@@ -242,7 +242,7 @@ class AddSpectatorPostCircuitBitFlipChecks(TransformationPass):
         idle on a full-width sync.
 
         Two existing barriers, ``barrier1`` and ``barrier2`` (originally
-        emitted by :class:`.AddPostCircuitBitFlipChecks` on the data qubits only),
+        emitted by :class:`.AddPostCircuitNonMarkovianErrorChecks` on the data qubits only),
         are extended to cover the spectator qubits as well; together they
         sandwich the pi-rotation pulses on both data and spec qubits.
 
@@ -294,7 +294,7 @@ class AddSpectatorPostCircuitBitFlipChecks(TransformationPass):
         deferred_terminal_node_ids = {n._node_id for n in data_terminal_nodes.values()}
 
         # Spectator-only ops after the first post-sel barrier are logically pre-check ops on the
-        # spec wires (e.g. ``measure -> reset`` from ``AddSpectatorPreCircuitBitFlipChecks``);
+        # spec wires (e.g. ``measure -> reset`` from ``AddSpectatorPreCircuitNonMarkovianErrorChecks``);
         # defer them so they emerge before the spec parity check.
         spec_qubit_set = set(spectator_qubits_ls)
         late_spec_nodes = [

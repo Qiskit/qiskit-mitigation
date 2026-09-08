@@ -21,12 +21,12 @@ import pytest
 from qiskit.circuit import QuantumCircuit
 from qiskit.transpiler import PassManager
 from qiskit.transpiler.exceptions import TranspilerError
-from qiskit_mitigation.bit_flip_checks.constants import RX_PULSE_COUNT
-from qiskit_mitigation.bit_flip_checks.passes import (
-    AddPostCircuitBitFlipChecks,
-    AddPreCircuitBitFlipChecks,
-    AddSpectatorPostCircuitBitFlipChecks,
-    AddSpectatorPreCircuitBitFlipChecks,
+from qiskit_mitigation.postselection.constants import RX_PULSE_COUNT
+from qiskit_mitigation.postselection.passes import (
+    AddPostCircuitNonMarkovianErrorChecks,
+    AddPreCircuitNonMarkovianErrorChecks,
+    AddSpectatorPostCircuitNonMarkovianErrorChecks,
+    AddSpectatorPreCircuitNonMarkovianErrorChecks,
 )
 
 # Coupling 4-0-1-2-3: active {0,1,2}, spectators (inactive neighbours) {3,4}.
@@ -71,8 +71,8 @@ def _meas_registers(circuit: QuantumCircuit, qubit_idx: int) -> list[str]:
 @pytest.mark.parametrize(
     "pass_cls, expected_cregs, expected_order",
     [
-        (AddPostCircuitBitFlipChecks, {"c": 3, "c_ps": 3}, ["c", "c_ps"]),
-        (AddPreCircuitBitFlipChecks, {"c": 3, "c_pre": 3}, ["c_pre", "c"]),
+        (AddPostCircuitNonMarkovianErrorChecks, {"c": 3, "c_ps": 3}, ["c", "c_ps"]),
+        (AddPreCircuitNonMarkovianErrorChecks, {"c": 3, "c_pre": 3}, ["c_pre", "c"]),
     ],
     ids=["post_sel_only", "pre_sel_only"],
 )
@@ -92,8 +92,8 @@ def test_post_sel_with_spectators():
     """Spectator parity check is spliced into the data-qubit post-sel sandwich."""
     pm = PassManager(
         [
-            AddPostCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPostCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx"),
+            AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPostCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx"),
         ]
     )
     result = pm.run(_make_circuit())
@@ -135,8 +135,8 @@ def test_pre_sel_with_spectators():
     """Pre-check spectators run the same pulses+X+measure check as data qubits."""
     pm = PassManager(
         [
-            AddPreCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPreCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx"),
+            AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPreCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx"),
         ]
     )
     result = pm.run(_make_circuit())
@@ -162,7 +162,9 @@ def test_spectators_only():
 
     Three barriers wrap the measure/pulse/measure so scheduling can't reorder it.
     """
-    pm = PassManager([AddSpectatorPostCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx")])
+    pm = PassManager(
+        [AddSpectatorPostCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx")]
+    )
     result = pm.run(_make_circuit())
 
     cregs = _creg_map(result)
@@ -225,16 +227,16 @@ def _assert_full_stack_invariants(result: QuantumCircuit) -> None:
     "pass_order",
     [
         [
-            AddPreCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPreCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx"),
-            AddPostCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPostCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx"),
+            AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPreCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx"),
+            AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPostCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx"),
         ],
         [
-            AddPostCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPostCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx"),
-            AddPreCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPreCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx"),
+            AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPostCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx"),
+            AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPreCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx"),
         ],
     ],
     ids=["pre_first", "post_first"],
@@ -251,8 +253,8 @@ def test_default_xslow_pulse_type():
     """Default ``x_pulse_type`` (xslow) wires up the XSlowGate pulse sequence."""
     pm = PassManager(
         [
-            AddPreCircuitBitFlipChecks(),
-            AddSpectatorPreCircuitBitFlipChecks(COUPLING_MAP),
+            AddPreCircuitNonMarkovianErrorChecks(),
+            AddSpectatorPreCircuitNonMarkovianErrorChecks(COUPLING_MAP),
         ]
     )
     result = pm.run(_make_circuit())
@@ -263,7 +265,7 @@ def test_default_xslow_pulse_type():
 
 @pytest.mark.parametrize(
     "pass_cls",
-    [AddSpectatorPostCircuitBitFlipChecks, AddSpectatorPreCircuitBitFlipChecks],
+    [AddSpectatorPostCircuitNonMarkovianErrorChecks, AddSpectatorPreCircuitNonMarkovianErrorChecks],
     ids=["post", "pre"],
 )
 def test_spec_no_spectators_returns_unchanged(pass_cls):
@@ -275,7 +277,9 @@ def test_spec_no_spectators_returns_unchanged(pass_cls):
 
 def test_spec_pre_standalone_builds_own_structure():
     """Spectator-pre pass on its own prepends a self-contained pre-check."""
-    pm = PassManager([AddSpectatorPreCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx")])
+    pm = PassManager(
+        [AddSpectatorPreCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx")]
+    )
     result = pm.run(_make_circuit())
 
     cregs = _creg_map(result)
@@ -306,7 +310,9 @@ def test_spec_pre_existing_register_size_mismatch_raises():
     qc.cx(1, 2)
     qc.measure([0, 1, 2], [0, 1, 2])
 
-    pm = PassManager([AddSpectatorPreCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx")])
+    pm = PassManager(
+        [AddSpectatorPreCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx")]
+    )
     with pytest.raises(TranspilerError, match="already exists with size"):
         pm.run(qc)
 
@@ -321,10 +327,10 @@ def test_spec_include_unmeasured_toggles_lone_unterminated_qubit():
     qc.h(0)  # active, never measured
 
     on = PassManager(
-        [AddSpectatorPostCircuitBitFlipChecks(coupling_map=[], include_unmeasured=True)]
+        [AddSpectatorPostCircuitNonMarkovianErrorChecks(coupling_map=[], include_unmeasured=True)]
     )
     off = PassManager(
-        [AddSpectatorPostCircuitBitFlipChecks(coupling_map=[], include_unmeasured=False)]
+        [AddSpectatorPostCircuitNonMarkovianErrorChecks(coupling_map=[], include_unmeasured=False)]
     )
 
     assert "spec" in {c.name for c in on.run(qc).cregs}
@@ -335,8 +341,8 @@ def test_spec_pre_include_unmeasured_false():
     """``include_unmeasured=False`` skips the unmeasured-active-qubit broadening."""
     pm = PassManager(
         [
-            AddPreCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPreCircuitBitFlipChecks(
+            AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPreCircuitNonMarkovianErrorChecks(
                 COUPLING_MAP, x_pulse_type="rx", include_unmeasured=False
             ),
         ]
@@ -360,10 +366,10 @@ def test_spec_pre_include_unmeasured_true_picks_up_lone_unterminated_qubit():
     qc.h(0)  # active, never measured
 
     on = PassManager(
-        [AddSpectatorPreCircuitBitFlipChecks(coupling_map=[], include_unmeasured=True)]
+        [AddSpectatorPreCircuitNonMarkovianErrorChecks(coupling_map=[], include_unmeasured=True)]
     )
     off = PassManager(
-        [AddSpectatorPreCircuitBitFlipChecks(coupling_map=[], include_unmeasured=False)]
+        [AddSpectatorPreCircuitNonMarkovianErrorChecks(coupling_map=[], include_unmeasured=False)]
     )
 
     assert "spec_pre" in {c.name for c in on.run(qc).cregs}
@@ -385,8 +391,8 @@ def test_spec_pre_existing_register_correct_size():
 
     pm = PassManager(
         [
-            AddPreCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPreCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx"),
+            AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPreCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx"),
         ]
     )
     result = pm.run(qc)
@@ -409,7 +415,7 @@ def test_spec_x_gate_followed_by_normal_measure():
     qc.measure(1, 1)
     qc.measure(2, 2)
 
-    pm = PassManager([AddSpectatorPostCircuitBitFlipChecks(COUPLING_MAP)])
+    pm = PassManager([AddSpectatorPostCircuitNonMarkovianErrorChecks(COUPLING_MAP)])
     result = pm.run(qc)
     creg_names = {c.name for c in result.cregs}
     assert "spec" in creg_names
@@ -435,7 +441,9 @@ def test_spec_post_sel_register_present_without_matching_barrier():
     qc.measure(1, creg_ps[1])
     qc.measure(2, creg_ps[2])
 
-    pm = PassManager([AddSpectatorPostCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx")])
+    pm = PassManager(
+        [AddSpectatorPostCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx")]
+    )
     result = pm.run(qc)
     creg_names = {c.name for c in result.cregs}
     assert "spec" in creg_names
@@ -466,10 +474,10 @@ def test_pre_sel_spectators_do_not_cascade_post_sel_spectators():
 
     pm = PassManager(
         [
-            AddPreCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPreCircuitBitFlipChecks(coupling, x_pulse_type="rx"),
-            AddPostCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPostCircuitBitFlipChecks(coupling, x_pulse_type="rx"),
+            AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPreCircuitNonMarkovianErrorChecks(coupling, x_pulse_type="rx"),
+            AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPostCircuitNonMarkovianErrorChecks(coupling, x_pulse_type="rx"),
         ]
     )
     result = pm.run(qc)
@@ -489,19 +497,19 @@ def test_full_stack_custom_suffixes():
     """Full stack with custom suffixes and a custom spec_pre register name."""
     pm = PassManager(
         [
-            AddPreCircuitBitFlipChecks(x_pulse_type="rx", pre_check_suffix="_init"),
-            AddSpectatorPreCircuitBitFlipChecks(
+            AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx", pre_check_suffix="_init"),
+            AddSpectatorPreCircuitNonMarkovianErrorChecks(
                 COUPLING_MAP,
                 x_pulse_type="rx",
                 spectator_creg_name="spec_init",
                 pre_check_suffix="_init",
             ),
-            AddPostCircuitBitFlipChecks(
+            AddPostCircuitNonMarkovianErrorChecks(
                 x_pulse_type="rx",
                 post_check_suffix="_check",
                 ignore_creg_suffixes=["_init"],
             ),
-            AddSpectatorPostCircuitBitFlipChecks(
+            AddSpectatorPostCircuitNonMarkovianErrorChecks(
                 COUPLING_MAP,
                 x_pulse_type="rx",
                 ignore_creg_suffixes=["_init"],
@@ -521,7 +529,8 @@ def test_full_stack_custom_suffixes():
 
 
 @pytest.mark.parametrize(
-    "pass_cls", [AddSpectatorPostCircuitBitFlipChecks, AddSpectatorPreCircuitBitFlipChecks]
+    "pass_cls",
+    [AddSpectatorPostCircuitNonMarkovianErrorChecks, AddSpectatorPreCircuitNonMarkovianErrorChecks],
 )
 def test_spectator_pass_rejects_circuit_smaller_than_coupling_map(pass_cls):
     """Coupling map larger than the circuit (e.g. virtual circuit + device map) is an error."""

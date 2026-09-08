@@ -11,7 +11,7 @@
 # that they have been altered from the originals.
 
 # Reminder: update the RST file in docs/apidocs when adding new interfaces.
-"""Transpiler pass to add pre-circuit bit-flip checks."""
+"""Transpiler pass to add pre-circuit non-Markovian error checks."""
 
 from __future__ import annotations
 
@@ -31,10 +31,10 @@ from ._utils import validate_op_is_supported
 from .x_pulse_type import XPulseType
 
 
-class AddPreCircuitBitFlipChecks(TransformationPass):
-    r"""Add bit-flip checks at the beginning of the circuit on active qubits terminated by a measurement.
+class AddPreCircuitNonMarkovianErrorChecks(TransformationPass):
+    r"""Add non-Markovian error checks at the beginning of the circuit on active qubits terminated by a measurement.
 
-    A pre-circuit bit-flip check consists of a narrowband X-pulse that rotates the qubit from
+    A pre-circuit non-Markovian error check consists of a narrowband X-pulse that rotates the qubit from
     :math:`|0\rangle\mapsto|1\rangle` followed by a normal X-pulse that rotates the qubit back
     to the ground state :math:`|0\rangle` and a measurement. If the QPU fails to flip the qubit from
     :math:`|0\rangle\mapsto|1\rangle\mapsto|0\rangle` on a given shot, that sample may be considered
@@ -101,7 +101,7 @@ class AddPreCircuitBitFlipChecks(TransformationPass):
         # with ignored suffixes/names, registers whose pre-check counterpart already exists, and any
         # register already ending in the pre-check suffix -- the last check is unconditional (unlike
         # the post-check pass), since a pre-check leaves a lone ``_pre`` register with no base. This
-        # keeps the pass safe to re-run and to run after ``AddSpectatorPreCircuitBitFlipChecks``.
+        # keeps the pass safe to re-run and to run after ``AddSpectatorPreCircuitNonMarkovianErrorChecks``.
         existing_creg_names = set(dag.cregs)
         clbits_map = {}
         for name, creg in dag.cregs.items():
@@ -143,7 +143,7 @@ class AddPreCircuitBitFlipChecks(TransformationPass):
             for gate in self.pulse_sequence:
                 new_dag.apply_operation_back(gate, [qubit])
 
-        # Add barrier before measurements - AddSpectatorPreCircuitBitFlipChecks will extend it.
+        # Add barrier before measurements - AddSpectatorPreCircuitNonMarkovianErrorChecks will extend it.
         # ``qubits_list`` is non-empty here (we returned early otherwise); the guard is defensive.
         if qubits_list:  # pragma: no branch
             new_dag.apply_operation_back(Barrier(len(qubits_list)), qubits_list)

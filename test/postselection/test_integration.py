@@ -22,14 +22,14 @@ import numpy as np
 import pytest
 from qiskit.circuit import QuantumCircuit
 from qiskit.transpiler import PassManager
-from qiskit_mitigation.bit_flip_checks import (
+from qiskit_mitigation.postselection import (
     PostSelector,
 )
-from qiskit_mitigation.bit_flip_checks.passes import (
-    AddPostCircuitBitFlipChecks,
-    AddPreCircuitBitFlipChecks,
-    AddSpectatorPostCircuitBitFlipChecks,
-    AddSpectatorPreCircuitBitFlipChecks,
+from qiskit_mitigation.postselection.passes import (
+    AddPostCircuitNonMarkovianErrorChecks,
+    AddPreCircuitNonMarkovianErrorChecks,
+    AddSpectatorPostCircuitNonMarkovianErrorChecks,
+    AddSpectatorPreCircuitNonMarkovianErrorChecks,
 )
 
 # Coupling 4-0-1-2-3, data qubits 0,1,2 active ⇒ spec qubits {3, 4}.
@@ -49,15 +49,15 @@ def _data_circuit() -> QuantumCircuit:
 
 def _passes_post_with_spec():
     return [
-        AddPostCircuitBitFlipChecks(x_pulse_type="rx"),
-        AddSpectatorPostCircuitBitFlipChecks(COUPLING, x_pulse_type="rx"),
+        AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+        AddSpectatorPostCircuitNonMarkovianErrorChecks(COUPLING, x_pulse_type="rx"),
     ]
 
 
 def _passes_pre_with_spec():
     return [
-        AddPreCircuitBitFlipChecks(x_pulse_type="rx"),
-        AddSpectatorPreCircuitBitFlipChecks(COUPLING, x_pulse_type="rx"),
+        AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+        AddSpectatorPreCircuitNonMarkovianErrorChecks(COUPLING, x_pulse_type="rx"),
     ]
 
 
@@ -94,12 +94,12 @@ def _passes_full_stack(*, pre_first: bool, custom: bool = False):
         spec_args = {"x_pulse_type": "rx"}
 
     pre_block = [
-        AddPreCircuitBitFlipChecks(**pre_args),
-        AddSpectatorPreCircuitBitFlipChecks(COUPLING, **spec_pre_args),
+        AddPreCircuitNonMarkovianErrorChecks(**pre_args),
+        AddSpectatorPreCircuitNonMarkovianErrorChecks(COUPLING, **spec_pre_args),
     ]
     post_block = [
-        AddPostCircuitBitFlipChecks(**post_args),
-        AddSpectatorPostCircuitBitFlipChecks(COUPLING, **spec_args),
+        AddPostCircuitNonMarkovianErrorChecks(**post_args),
+        AddSpectatorPostCircuitNonMarkovianErrorChecks(COUPLING, **spec_args),
     ]
     return pre_block + post_block if pre_first else post_block + pre_block
 
@@ -218,10 +218,10 @@ def test_full_stack_spec_only_failure_node_vs_edge():
 def _passes_legacy_spec_then_post(*, spectator_creg_name: str = "spec", x_pulse_type: str = "rx"):
     """Old client pattern: spec measurements first, then the post-sel pass."""
     return [
-        AddSpectatorPostCircuitBitFlipChecks(
+        AddSpectatorPostCircuitNonMarkovianErrorChecks(
             COUPLING, x_pulse_type=x_pulse_type, spectator_creg_name=spectator_creg_name
         ),
-        AddPostCircuitBitFlipChecks(x_pulse_type=x_pulse_type),
+        AddPostCircuitNonMarkovianErrorChecks(x_pulse_type=x_pulse_type),
     ]
 
 
@@ -256,9 +256,11 @@ def test_legacy_and_recommended_orderings_produce_identical_masks(strategy):
 
 
 def test_post_sel_pass_rerun_is_noop():
-    """Re-running ``AddPostCircuitBitFlipChecks`` on its own output is a no-op."""
-    once = PassManager([AddPostCircuitBitFlipChecks(x_pulse_type="rx")]).run(_data_circuit())
-    twice = PassManager([AddPostCircuitBitFlipChecks(x_pulse_type="rx")]).run(once)
+    """Re-running ``AddPostCircuitNonMarkovianErrorChecks`` on its own output is a no-op."""
+    once = PassManager([AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx")]).run(
+        _data_circuit()
+    )
+    twice = PassManager([AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx")]).run(once)
     assert {cr.name for cr in once.cregs} == {cr.name for cr in twice.cregs}
     pulse_count_once = sum(1 for instr in once.data if instr.operation.name in ("rx", "xslow"))
     pulse_count_twice = sum(1 for instr in twice.data if instr.operation.name in ("rx", "xslow"))
@@ -266,9 +268,11 @@ def test_post_sel_pass_rerun_is_noop():
 
 
 def test_pre_sel_pass_rerun_is_noop():
-    """Re-running ``AddPreCircuitBitFlipChecks`` on its own output is a no-op."""
-    once = PassManager([AddPreCircuitBitFlipChecks(x_pulse_type="rx")]).run(_data_circuit())
-    twice = PassManager([AddPreCircuitBitFlipChecks(x_pulse_type="rx")]).run(once)
+    """Re-running ``AddPreCircuitNonMarkovianErrorChecks`` on its own output is a no-op."""
+    once = PassManager([AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx")]).run(
+        _data_circuit()
+    )
+    twice = PassManager([AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx")]).run(once)
     assert {cr.name for cr in once.cregs} == {cr.name for cr in twice.cregs}
     pulse_count_once = sum(1 for instr in once.data if instr.operation.name in ("rx", "xslow"))
     pulse_count_twice = sum(1 for instr in twice.data if instr.operation.name in ("rx", "xslow"))

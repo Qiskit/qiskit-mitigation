@@ -38,19 +38,19 @@ class PostSelectionStrategy(str, Enum):
 
 
 class PostSelector:
-    """A class to process the results of bit-flip checks."""
+    """A class to process the results of non-Markovian error checks."""
 
     def __init__(self, summary: PostSelectionSummary):
         """Initialize a ``PostSelector`` object.
 
         Args:
-            summary: A summary of the circuit containing bit-flip checks.
+            summary: A summary of the circuit containing non-Markovian error checks.
         """
         self._summary = summary
 
     @property
     def summary(self) -> PostSelectionSummary:
-        """A summary of the circuit containing bit-flip checks."""
+        """A summary of the circuit containing non-Markovian error checks."""
         return self._summary
 
     @classmethod
@@ -66,13 +66,13 @@ class PostSelector:
         """Initialize from a quantum circuit.
 
         Args:
-            circuit: The circuit containing bit-flip checks.
+            circuit: The circuit containing non-Markovian error checks.
             coupling_map: A coupling map or a list of tuples indicating pairs of neighboring qubits.
             post_check_suffix: A fixed suffix for classical registers associated with post-circuit checks.
             pre_check_suffix: A fixed suffix for classical registers associated with pre-circuit checks.
             spectator_cregs: Names of registers that hold spectator measurements (the first half of the
-                spectator parity check produced by :class:`.AddSpectatorPostCircuitBitFlipChecks`). Defaults
-                to ``["spec"]`` to match :class:`.AddSpectatorPostCircuitBitFlipChecks`.
+                spectator parity check produced by :class:`.AddSpectatorPostCircuitNonMarkovianErrorChecks`). Defaults
+                to ``["spec"]`` to match :class:`.AddSpectatorPostCircuitNonMarkovianErrorChecks`.
         """
         coupling_map = (
             coupling_map

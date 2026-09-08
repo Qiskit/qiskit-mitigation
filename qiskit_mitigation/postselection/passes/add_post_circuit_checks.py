@@ -11,7 +11,7 @@
 # that they have been altered from the originals.
 
 # Reminder: update the RST file in docs/apidocs when adding new interfaces.
-"""Transpiler pass to add post-circuit bit-flip checks."""
+"""Transpiler pass to add post-circuit non-Markovian error checks."""
 
 from __future__ import annotations
 
@@ -31,10 +31,10 @@ from ._utils import validate_op_is_supported
 from .x_pulse_type import XPulseType
 
 
-class AddPostCircuitBitFlipChecks(TransformationPass):
-    r"""Add bit-flip checks at the end of the circuit on active qubits terminated by a measurement.
+class AddPostCircuitNonMarkovianErrorChecks(TransformationPass):
+    r"""Add non-Markovian error checks at the end of the circuit on active qubits terminated by a measurement.
 
-    A post-circuit bit-flip check consists of a narrowband X-pulse located after a terminal measurement
+    A post-circuit non-Markovian error check consists of a narrowband X-pulse located after a terminal measurement
     that flips the state of the qubit from the measured state :math:`|x\rangle\mapsto|x\oplus1\rangle`.
     The state is then measured, and if the QPU failed to flip the qubit on a given shot, that sample may
     be considered unreliable and discarded. Postselecting only samples that pass all checks can improve
@@ -82,7 +82,7 @@ class AddPostCircuitBitFlipChecks(TransformationPass):
         # Add the new registers and map each original clbit to its post-check copy. Skip registers
         # with ignored suffixes, registers whose post-check counterpart already exists, and registers
         # that *are* a post-check counterpart (re-suffixing them would chain another ``_ps``), so the
-        # pass is safe to re-run and to run after ``AddSpectatorPostCircuitBitFlipChecks``.
+        # pass is safe to re-run and to run after ``AddSpectatorPostCircuitNonMarkovianErrorChecks``.
         existing_creg_names = set(dag.cregs)
         suffix = self.post_check_suffix
         clbits_map = {}
@@ -116,7 +116,7 @@ class AddPostCircuitBitFlipChecks(TransformationPass):
             for gate in self.pulse_sequence:
                 dag.apply_operation_back(gate, [qubit])
 
-        # Add a barrier before measurements - AddSpectatorPostCircuitBitFlipChecks will extend it
+        # Add a barrier before measurements - AddSpectatorPostCircuitNonMarkovianErrorChecks will extend it
         dag.apply_operation_back(Barrier(len(qubits)), qubits)
 
         # Then add all measurements

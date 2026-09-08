@@ -11,18 +11,18 @@
 # that they have been altered from the originals.
 
 # Reminder: update the RST file in docs/apidocs when adding new interfaces.
-"""A submodule with transpilation passes for circuit bit-flip checks."""
+"""A submodule with transpilation passes for circuit non-Markovian error checks."""
 
-from .add_post_circuit_checks import AddPostCircuitBitFlipChecks
-from .add_pre_circuit_checks import AddPreCircuitBitFlipChecks
-from .add_spectator_post_circuit_checks import AddSpectatorPostCircuitBitFlipChecks
-from .add_spectator_pre_circuit_checks import AddSpectatorPreCircuitBitFlipChecks
+from .add_post_circuit_checks import AddPostCircuitNonMarkovianErrorChecks
+from .add_pre_circuit_checks import AddPreCircuitNonMarkovianErrorChecks
+from .add_spectator_post_circuit_checks import AddSpectatorPostCircuitNonMarkovianErrorChecks
+from .add_spectator_pre_circuit_checks import AddSpectatorPreCircuitNonMarkovianErrorChecks
 from .x_pulse_type import XPulseType
 
 __all__ = [
-    "AddPostCircuitBitFlipChecks",
-    "AddPreCircuitBitFlipChecks",
-    "AddSpectatorPostCircuitBitFlipChecks",
-    "AddSpectatorPreCircuitBitFlipChecks",
+    "AddPostCircuitNonMarkovianErrorChecks",
+    "AddPreCircuitNonMarkovianErrorChecks",
+    "AddSpectatorPostCircuitNonMarkovianErrorChecks",
+    "AddSpectatorPreCircuitNonMarkovianErrorChecks",
     "XPulseType",
 ]

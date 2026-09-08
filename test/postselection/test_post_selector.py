@@ -14,7 +14,7 @@
 import numpy as np
 import pytest
 from qiskit.circuit import ClassicalRegister, QuantumCircuit, QuantumRegister
-from qiskit_mitigation.bit_flip_checks import PostSelectionSummary, PostSelector
+from qiskit_mitigation.postselection import PostSelectionSummary, PostSelector
 
 
 def _build_5q_check_circuit(suffix):
