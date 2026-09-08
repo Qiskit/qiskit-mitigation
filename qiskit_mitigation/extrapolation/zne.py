@@ -568,6 +568,14 @@ class ZNE(MitigationTask):
                 noise_scaled_ensemble_std = []
                 for noise_factor_index in range(len(noise_factors)):
                     noise_factor_data = noise_amplified_data[noise_factor_index]
+                    if len(noise_factor_data.shape) == 5:
+                        # combine the meas_bases and params into a single axis
+                        new_shape = (
+                            noise_factor_data.shape[0],
+                            noise_factor_data.shape[1] * noise_factor_data.shape[2],
+                            *noise_factor_data.shape[3:],
+                        )
+                        noise_factor_data = noise_factor_data.reshape(new_shape)
                     # Get measurement data for this configuration
                     # datum shape: (num_randomizations, shots_per_randomization, num_qubits)
                     datum = noise_factor_data[:, config_idx, :, :]
@@ -822,6 +830,11 @@ class ZNE(MitigationTask):
             if param_basis_pairs is None:
                 broadcast_shape = observables_arr.shape + param_shape
                 meas_bases = PauliList(meas_bases)
+                if len(param_shape) > 0:
+                    # broadcast the observables with the parameters
+                    observables_arr = ObservablesArray(
+                        np.repeat(observables_arr[..., np.newaxis], param_shape, axis=1)
+                    )
                 param_basis_pairs = ZNE._compute_param_basis_pairs(
                     observables_arr, param_shape, broadcast_shape, meas_bases
                 )

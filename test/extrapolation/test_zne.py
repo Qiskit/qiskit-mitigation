@@ -662,8 +662,31 @@ class TestComputeExpectationValueZne(unittest.TestCase):
 
     def test_non_broadcast_4d_data_auto_infers_empty_param_shape(self):
         """4-D data in non-broadcast mode must auto-infer ``param_shape=()``."""
+        # 4-D shape: (R, bases, S, bits) - use 1 param set
+        data_4d = np.zeros((2, 1, 4, 1), dtype=bool)
+        item_results = [{"_meas": data_4d} for _ in NOISE_FACTORS]
+
         result = ZNE.compute_expectation_value_zne(
-            self._item_results(),
+            item_results,
+            observables=_obs("Z"),
+            param_shape=None,
+            param_basis_pairs=None,
+            noise_factors=NOISE_FACTORS,
+            extrapolator=["linear"],
+            broadcast_obs_and_params=False,
+            meas_bases=[Pauli("Z")],
+        )
+        self.assertIsInstance(result, PubResult)
+
+    def test_non_broadcast_5d_data_auto_infers_param_shape_and_computes_pairs(self):
+        """5-D data with ``param_basis_pairs=None`` must infer ``param_shape`` from
+        ``data_shape[2]`` and then broadcast the observables array."""
+        # 5-D shape: (num_randomizations, num_bases, num_parameters, shots, num_bits)
+        data_5d = np.zeros((2, 1, 1, 4, 1), dtype=bool)
+        item_results = [{"_meas": data_5d} for _ in NOISE_FACTORS]
+
+        result = ZNE.compute_expectation_value_zne(
+            item_results,
             observables=_obs("Z"),
             param_shape=None,
             param_basis_pairs=None,
