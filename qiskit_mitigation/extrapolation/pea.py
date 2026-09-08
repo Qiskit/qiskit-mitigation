@@ -246,7 +246,7 @@ class PEA(MitigationTask):
         # Subtract 1 from noise_factors, since a value of 1 represents the noise
         # that is present in the circuit in the absence of amplification.
         # Also, make noise_scales broadcastable with the parameters and randomizations.
-        noise_scales = np.expand_dims(np.array(noise_factors) - 1, (-1, -2))
+        noise_scales = np.expand_dims(np.array(noise_factors) - 1, tuple(range(1, len(shape) + 1)))
 
         # Create a noise model map containing only the layers relevant for the given circuit
         specs = samplex.inputs().get_specs("pauli_lindblad_maps")
@@ -580,6 +580,11 @@ class PEA(MitigationTask):
             if param_basis_pairs is None:
                 broadcast_shape = observables_arr.shape + param_shape
                 meas_bases = PauliList(meas_bases)
+                if len(param_shape) > 0:
+                    # broadcast the observables with the parameters
+                    observables_arr = ObservablesArray(
+                        np.repeat(observables_arr[..., np.newaxis], param_shape, axis=1)
+                    )
                 param_basis_pairs = PEA._compute_param_basis_pairs(
                     observables_arr, param_shape, broadcast_shape, meas_bases
                 )
