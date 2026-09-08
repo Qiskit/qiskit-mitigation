@@ -834,6 +834,24 @@ class TestZNEPostprocess(unittest.TestCase):
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolated_noise_factors"], override)
 
+    def test_postprocess_with_extrapolated_noise_factors(self):
+        qc = QuantumCircuit(1)
+        qc.x(0)
+
+        zne = ZNE()
+        zne.prepare(
+            circuit=qc,
+            observables=[SparsePauliOp("Z")],
+            parameters=None,
+            noise_factors=[1, 3],
+            extrapolator=["linear"],
+            extrapolated_noise_factors=[0.0],
+        )
+
+        fake_meas = np.zeros((1, 1, 1, 1), dtype=np.uint8)
+        result = zne.postprocess([{"_meas": fake_meas}, {"_meas": fake_meas}])
+        self.assertIsInstance(result, PubResult)
+
 
 # ---------------------------------------------------------------------------
 # ZNE._extract_items_list_data - warning paths
