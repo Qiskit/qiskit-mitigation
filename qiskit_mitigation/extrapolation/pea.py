@@ -519,7 +519,7 @@ class PEA(MitigationTask):
             ValueError: If ``noise_factors`` is under-specified for any extrapolator.
         """
         try:
-            data = item_result["_meas"]
+            data = item_result["_meas"].copy()
         except KeyError as ex:
             raise ValueError(
                 "Dedicated creg ``'_meas'`` is missing from one of the results."
@@ -590,7 +590,7 @@ class PEA(MitigationTask):
                 )
 
         # Apply measurement flips if present
-        meas_flips = item_result.pop("measurement_flips._meas", None)
+        meas_flips = item_result.get("measurement_flips._meas", None)
         if meas_flips is not None:
             data ^= meas_flips
 
@@ -615,9 +615,9 @@ class PEA(MitigationTask):
             custom_fit=custom_fit,
         )
         returned_extrapolated_exp_vals = (
-            None if extrapolated_noise_factors == [] else extrapolated_exp_vals
+            None if np.asarray(extrapolated_noise_factors).size == 0 else extrapolated_exp_vals
         )
-        returned_extrapolated_stds = None if extrapolated_noise_factors == [] else extrapolated_stds
+        returned_extrapolated_stds = None if np.asarray(extrapolated_noise_factors).size == 0 else extrapolated_stds
 
         data_bin = DataBin(
             evs=zero_extrapolated_exp_vals,

@@ -617,7 +617,7 @@ class PEC(MitigationTask):
                 each other.
         """
         try:
-            data = item_result["_meas"]
+            data = item_result["_meas"].copy()
         except KeyError as ex:
             raise ValueError("Dedicated creg ``'_meas'`` is missing from the results.") from ex
 
@@ -646,7 +646,7 @@ class PEC(MitigationTask):
 
             # Apply measurement flips if present
             if "measurement_flips._meas" in item_result:
-                data ^= item_result.pop("measurement_flips._meas")
+                data ^= item_result["measurement_flips._meas"]
 
             if isinstance(observables, SparsePauliOp):
                 observables = ObservablesArray.coerce(observables)
@@ -677,7 +677,7 @@ class PEC(MitigationTask):
             )
 
         meas_flips = (
-            item_result.pop("measurement_flips._meas")
+            item_result["measurement_flips._meas"]
             if "measurement_flips._meas" in item_result
             else None
         )
