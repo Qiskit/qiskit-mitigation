@@ -16,13 +16,15 @@ from __future__ import annotations
 import pytest
 from qiskit.circuit import QuantumCircuit
 from qiskit.transpiler import PassManager
-from qiskit_mitigation.bit_flip_checks.passes import (
-    AddPostCircuitBitFlipChecks,
-    AddPreCircuitBitFlipChecks,
+from qiskit_mitigation.postselection.passes import (
+    AddPostCircuitNonMarkovianErrorChecks,
+    AddPreCircuitNonMarkovianErrorChecks,
 )
 
 
-@pytest.mark.parametrize("pass_cls", [AddPostCircuitBitFlipChecks, AddPreCircuitBitFlipChecks])
+@pytest.mark.parametrize(
+    "pass_cls", [AddPostCircuitNonMarkovianErrorChecks, AddPreCircuitNonMarkovianErrorChecks]
+)
 def test_empty_circuit_returns_unchanged(pass_cls):
     """Empty circuit is unchanged by the check pass."""
     qc = QuantumCircuit(1)
@@ -30,7 +32,9 @@ def test_empty_circuit_returns_unchanged(pass_cls):
     assert pm.run(qc) == qc
 
 
-@pytest.mark.parametrize("pass_cls", [AddPostCircuitBitFlipChecks, AddPreCircuitBitFlipChecks])
+@pytest.mark.parametrize(
+    "pass_cls", [AddPostCircuitNonMarkovianErrorChecks, AddPreCircuitNonMarkovianErrorChecks]
+)
 def test_invalid_x_pulse_type(pass_cls):
     """Unknown ``x_pulse_type`` is rejected by the check pass."""
     with pytest.raises(ValueError):
@@ -41,7 +45,7 @@ def test_pre_check_no_measurements_returns_unchanged():
     """Active qubits but no measurements: pass exits early without modification."""
     qc = QuantumCircuit(1)
     qc.h(0)
-    pm = PassManager([AddPreCircuitBitFlipChecks()])
+    pm = PassManager([AddPreCircuitNonMarkovianErrorChecks()])
     assert pm.run(qc) == qc
 
 
@@ -53,7 +57,7 @@ def test_pre_check_only_ignored_registers_returns_unchanged():
     qc.h(0)
     qc.measure(0, 0)
     # Default ``ignore_creg_names=["spec"]`` filters out the only register.
-    pm = PassManager([AddPreCircuitBitFlipChecks()])
+    pm = PassManager([AddPreCircuitNonMarkovianErrorChecks()])
     assert pm.run(qc) == qc
 
 
@@ -65,7 +69,7 @@ def test_unsupported_op_raises():
     qc = QuantumCircuit(1, 1)
     qc.append(Initialize("0"), [0])
     qc.measure(0, 0)
-    pm = PassManager([AddPostCircuitBitFlipChecks()])
+    pm = PassManager([AddPostCircuitNonMarkovianErrorChecks()])
     with pytest.raises(TranspilerError, match="not supported"):
         pm.run(qc)
 
@@ -77,7 +81,7 @@ def test_delay_is_supported():
     qc = QuantumCircuit(1, 1)
     qc.append(Delay(100), [0])
     qc.measure(0, 0)
-    pm = PassManager([AddPostCircuitBitFlipChecks()])
+    pm = PassManager([AddPostCircuitNonMarkovianErrorChecks()])
     result = pm.run(qc)
     # The delay does not block terminal-measurement detection, so a post-check register is added.
     assert "c_ps" in {creg.name for creg in result.cregs}
@@ -94,5 +98,5 @@ def test_post_check_skips_user_reset():
     qc.reset(0)
     qc.measure(0, creg[0])
 
-    result = PassManager([AddPostCircuitBitFlipChecks()]).run(qc)
+    result = PassManager([AddPostCircuitNonMarkovianErrorChecks()]).run(qc)
     assert {creg.name for creg in result.cregs} == {"c", "c_ps"}

@@ -19,5 +19,5 @@
    qiskit_mitigation.trex
    qiskit_mitigation.noise
    qiskit_mitigation.utils
-   qiskit_mitigation.bit_flip_checks
-   qiskit_mitigation.bit_flip_checks.passes
+   qiskit_mitigation.postselection
+   qiskit_mitigation.postselection.passes

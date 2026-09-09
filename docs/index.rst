@@ -6,7 +6,7 @@ Qiskit Mitigation is a package for handling noise in quantum computations. It co
 
 1. Implementations of PEC, TREX, PEA, and gate folding ZNE 
 2. Functionality for computing a postselected noise channel, from circuit symmetries or spacetime checks, to be used with PEC to reduce sampling overhead
-3. Postselection using bit-flip checks for filtering out non-Markovian noise from measured samples
+3. Postselection using non-Markovian error checks to filter corrupted samples out of measured data
 4. Support for expectation value calculation with advanced error mitigation
 
 Contributing
@@ -45,7 +45,7 @@ documented in the `release notes <https://quantum.cloud.ibm.com/docs/api/qiskit-
    :hidden:
    :caption: Tutorials
 
-   Postselection with bit-flip checks <https://quantum.cloud.ibm.com/docs/guides/postselection_with_bit_flip_checks.ipynb>
+   Postselection with non-Markovian error checks <https://quantum.cloud.ibm.com/docs/guides/postselection_with_non_markovian_error_checks.ipynb>
 
 .. toctree::
    :hidden:

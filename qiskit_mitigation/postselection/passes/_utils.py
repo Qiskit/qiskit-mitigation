@@ -10,7 +10,7 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Internal helpers shared by the bit-flip check passes."""
+"""Internal helpers shared by the non-Markovian error check passes."""
 
 from qiskit.circuit import ControlFlowOp
 from qiskit.dagcircuit import DAGOpNode

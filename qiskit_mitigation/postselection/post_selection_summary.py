@@ -30,7 +30,7 @@ from .constants import (
 
 
 class PostSelectionSummary:
-    """A helper class to store the properties of a quantum circuit required to postselect based on bit-flip checks."""
+    """A helper class to store the properties of a quantum circuit required to postselect based on non-Markovian error checks."""
 
     def __init__(
         self,
@@ -58,7 +58,7 @@ class PostSelectionSummary:
             pre_check_suffix: The suffix of the pre-circuit check registers.
             spectator_cregs: Names of primary registers that hold spectator measurements
                 (the first half of the spectator parity check produced by
-                :class:`.AddSpectatorPostCircuitBitFlipChecks`).
+                :class:`.AddSpectatorPostCircuitNonMarkovianErrorChecks`).
         """
         self._primary_cregs = primary_cregs
         self._measure_map = measure_map
@@ -126,13 +126,13 @@ class PostSelectionSummary:
         """Initialize from quantum circuits.
 
         Args:
-            circuit: The circuit containing bit-flip checks..
+            circuit: The circuit containing non-Markovian error checks.
             coupling_map: A coupling map or a list of tuples indicating pairs of neighboring qubits.
             post_check_suffix: A fixed suffix for post-circuit check classical registers.
             pre_check_suffix: A fixed suffix for pre-circuit check classical registers.
             spectator_cregs: Names of primary registers that hold spectator
                 measurements. Defaults to ``["spec"]``, matching the default name used by
-                :class:`.AddSpectatorPostCircuitBitFlipChecks`.
+                :class:`.AddSpectatorPostCircuitNonMarkovianErrorChecks`.
         """
         if spectator_cregs is None:
             spectator_cregs = [DEFAULT_SPECTATOR_CREG_NAME]
@@ -148,7 +148,7 @@ class PostSelectionSummary:
         )
 
         # Spectator primaries (e.g. ``spec``) are exempt from the pre-check requirement:
-        # ``AddSpectatorPostCircuitBitFlipChecks`` adds a ``_ps`` partner but no ``_pre`` one.
+        # ``AddSpectatorPostCircuitNonMarkovianErrorChecks`` adds a ``_ps`` partner but no ``_pre`` one.
         if ps_cregs:
             _validate_cregs(primary_cregs, ps_cregs, post_check_suffix)
         if pre_cregs:
@@ -235,7 +235,7 @@ def _validate_cregs(
     name + ``selection_suffix``, same number of clbits). Selection registers
     that don't correspond to any primary are *allowed* — they are treated as
     spectator selection registers (e.g. ``spec_pre`` produced by
-    :class:`.AddSpectatorPreCircuitBitFlipChecks` when no spec primary exists).
+    :class:`.AddSpectatorPreCircuitNonMarkovianErrorChecks` when no spec primary exists).
 
     Args:
         primary_cregs: The primary cregs.
@@ -244,7 +244,7 @@ def _validate_cregs(
         exempt_primary: Names of primary registers that are *allowed* to lack a
             matching selection register. Used to exempt spectator primaries
             (e.g. ``spec``) from the pre-check requirement, since
-            :class:`.AddSpectatorPostCircuitBitFlipChecks` adds only a ``_ps`` partner. A
+            :class:`.AddSpectatorPostCircuitNonMarkovianErrorChecks` adds only a ``_ps`` partner. A
             matching register that *is* present is still size-checked.
 
     Raise:

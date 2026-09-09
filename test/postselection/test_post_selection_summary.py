@@ -17,11 +17,11 @@ import pytest
 from qiskit.circuit import ClassicalRegister, QuantumCircuit, QuantumRegister
 from qiskit.converters import circuit_to_dag
 from qiskit.transpiler import PassManager
-from qiskit_mitigation.bit_flip_checks import PostSelectionSummary
-from qiskit_mitigation.bit_flip_checks.passes import (
-    AddPostCircuitBitFlipChecks,
+from qiskit_mitigation.postselection import PostSelectionSummary
+from qiskit_mitigation.postselection.passes import (
+    AddPostCircuitNonMarkovianErrorChecks,
 )
-from qiskit_mitigation.bit_flip_checks.post_selection_summary import _get_measure_maps
+from qiskit_mitigation.postselection.post_selection_summary import _get_measure_maps
 
 _UNSET = object()
 
@@ -433,7 +433,7 @@ def test_from_circuit_does_not_recurse_into_control_flow_ops():
         qc.cx(1, 2)
         qc.measure([0, 1, 2], [0, 1, 2])  # measurements buried inside the box
 
-    out = PassManager([AddPostCircuitBitFlipChecks(x_pulse_type="rx")]).run(qc)
+    out = PassManager([AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx")]).run(qc)
     # Summary sees the top-level ``c_ps`` but not the boxed primaries, so the count check raises.
     with pytest.raises(ValueError, match="measurements"):
         PostSelectionSummary.from_circuit(out, [(0, 1), (1, 2)])

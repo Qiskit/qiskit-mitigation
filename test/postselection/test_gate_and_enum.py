@@ -14,8 +14,8 @@
 from __future__ import annotations
 
 import pytest
-from qiskit_mitigation.bit_flip_checks import XSlowGate
-from qiskit_mitigation.bit_flip_checks.passes import XPulseType
+from qiskit_mitigation.postselection import XSlowGate
+from qiskit_mitigation.postselection.passes import XPulseType
 
 
 def test_xslow_gate_defaults():

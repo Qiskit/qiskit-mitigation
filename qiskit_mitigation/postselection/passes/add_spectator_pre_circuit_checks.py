@@ -11,7 +11,7 @@
 # that they have been altered from the originals.
 
 # Reminder: update the RST file in docs/apidocs when adding new interfaces.
-"""Transpiler pass to add pre-circuit bit-flip checks on spectator qubits."""
+"""Transpiler pass to add pre-circuit non-Markovian error checks on spectator qubits."""
 
 from __future__ import annotations
 
@@ -33,10 +33,10 @@ from ._utils import validate_op_is_supported
 from .x_pulse_type import XPulseType
 
 
-class AddSpectatorPreCircuitBitFlipChecks(TransformationPass):
-    r"""Add bit-flip checks at the beginning of the circuit on qubits adjacent to active qubits.
+class AddSpectatorPreCircuitNonMarkovianErrorChecks(TransformationPass):
+    r"""Add non-Markovian error checks at the beginning of the circuit on qubits adjacent to active qubits.
 
-    Each spectator qubit receives a pre-circuit bit-flip check: A narrowband X-pulse
+    Each spectator qubit receives a pre-circuit non-Markovian error check: A narrowband X-pulse
     that flips the qubit's state (:math:`|x\rangle\mapsto|x\oplus1\rangle`), then a regular X-pulse
     followed by a measurement. If the QPU fails to flip the qubit from :math:`|0\rangle\mapsto|1\rangle\mapsto|0\rangle`,
     that sample may be considered unreliable and discarded. Postselecting only samples that pass all
@@ -72,12 +72,12 @@ class AddSpectatorPreCircuitBitFlipChecks(TransformationPass):
             spectator_creg_name: The name of the classical register added for the measurements on the spectator qubits.
             ignore_spectator_creg_names: List of classical register names to ignore when determining active qubits.
                 Qubits that only have measurements to these registers are not considered active, preventing cascading
-                spectator selection. Defaults to ``["spec"]`` (the default name used by :class:`.AddSpectatorPostCircuitBitFlipChecks`).
+                spectator selection. Defaults to ``["spec"]`` (the default name used by :class:`.AddSpectatorPostCircuitNonMarkovianErrorChecks`).
             ignore_creg_suffixes: A list of suffixes for classical registers that should be ignored when determining
                 terminated qubits. Qubits with measurements into registers with these suffixes are not considered
                 terminated, allowing pre-check measurements to be added. By default, registers ending with "_ps"
                 are ignored to allow pre-check after post-check.
-            pre_check_suffix: The suffix used by AddPreCircuitBitFlipChecks for pre-check registers. This is used
+            pre_check_suffix: The suffix used by AddPreCircuitNonMarkovianErrorChecks for pre-check registers. This is used
                 to identify which qubits have pre-check measurements and which barrier to extend. Defaults to "_pre".
         """
         super().__init__()
@@ -193,7 +193,7 @@ class AddSpectatorPreCircuitBitFlipChecks(TransformationPass):
             None,
         )
         if first_barrier_idx is None:  # pragma: no cover
-            # Defensive: ``AddPreCircuitBitFlipChecks`` always emits this barrier, so unreachable.
+            # Defensive: ``AddPreCircuitNonMarkovianErrorChecks`` always emits this barrier, so unreachable.
             return dag
 
         # Pre-check pulses on each spec qubit first; with the extended barrier and trailing
@@ -203,7 +203,7 @@ class AddSpectatorPreCircuitBitFlipChecks(TransformationPass):
                 new_dag.apply_operation_back(gate, [qubit])
 
         # Spectator-only ops before the pre-check barrier are logically post-check ops on the spec
-        # wires (e.g. a prior ``AddSpectatorPostCircuitBitFlipChecks`` parity check); defer them
+        # wires (e.g. a prior ``AddSpectatorPostCircuitNonMarkovianErrorChecks`` parity check); defer them
         # past the extended barrier and pre-sel measure. Normally empty (post-sel ops depend on
         # data wires and land after the barrier), but the deferral is kept as a safety net.
         spec_qubit_set = set(spectator_qubits_ls)

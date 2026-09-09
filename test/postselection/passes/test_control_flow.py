@@ -17,11 +17,11 @@ from __future__ import annotations
 
 from qiskit.circuit import ClassicalRegister, QuantumCircuit, QuantumRegister
 from qiskit.transpiler import PassManager
-from qiskit_mitigation.bit_flip_checks.passes import (
-    AddPostCircuitBitFlipChecks,
-    AddPreCircuitBitFlipChecks,
-    AddSpectatorPostCircuitBitFlipChecks,
-    AddSpectatorPreCircuitBitFlipChecks,
+from qiskit_mitigation.postselection.passes import (
+    AddPostCircuitNonMarkovianErrorChecks,
+    AddPreCircuitNonMarkovianErrorChecks,
+    AddSpectatorPostCircuitNonMarkovianErrorChecks,
+    AddSpectatorPreCircuitNonMarkovianErrorChecks,
 )
 
 COUPLING_MAP = [(0, 1), (1, 2), (2, 3), (0, 4)]
@@ -81,7 +81,7 @@ def test_post_check_if_else_consistent():
 
     The trailing ``cx(1, 2)`` un-terminates q1, so it gets no ``c_ps``; q0 and q2 do.
     """
-    pm = PassManager([AddPostCircuitBitFlipChecks(x_pulse_type="rx")])
+    pm = PassManager([AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx")])
     result = pm.run(_if_else_circuit_consistent())
 
     assert _creg_names(result) == {"c", "c_ps"}
@@ -92,7 +92,7 @@ def test_post_check_if_else_consistent():
 
 def test_post_check_if_else_inconsistent():
     """Branches measure different qubits: neither is terminated, no post-sel added."""
-    pm = PassManager([AddPostCircuitBitFlipChecks(x_pulse_type="rx")])
+    pm = PassManager([AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx")])
     result = pm.run(_if_else_circuit_inconsistent())
 
     # Only q0 has an unconditional terminal measurement; q1/q2 measure inside one
@@ -123,8 +123,8 @@ def test_spectator_with_buried_data_neighbour_measure_falls_through():
     # Post pass first so the spectator pass takes the integrate-with-postsel path.
     pm = PassManager(
         [
-            AddPostCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPostCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx"),
+            AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPostCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx"),
         ]
     )
     result = pm.run(qc)
@@ -137,8 +137,8 @@ def test_spec_pre_check_if_else():
     """Pre-check spectators handle ``if_else``-driven activity correctly."""
     pm = PassManager(
         [
-            AddPreCircuitBitFlipChecks(x_pulse_type="rx"),
-            AddSpectatorPreCircuitBitFlipChecks(COUPLING_MAP, x_pulse_type="rx"),
+            AddPreCircuitNonMarkovianErrorChecks(x_pulse_type="rx"),
+            AddSpectatorPreCircuitNonMarkovianErrorChecks(COUPLING_MAP, x_pulse_type="rx"),
         ]
     )
     result = pm.run(_if_else_circuit_consistent())
