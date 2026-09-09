@@ -4,7 +4,7 @@ Qiskit Mitigation
 
 Qiskit Mitigation is a package for handling noise in quantum computations. It contains a set of techniques that can be used to build advanced or customized error mitigation pipelines directly with `samplomatic <https://github.com/Qiskit/samplomatic>`__. Specifically, it contains:
 
-1. Implementations of PEC, TREX, PEA, and gate folding ZNE 
+1. Implementations of Probabilistic Error Cancellation (PEC), Twirling Readout Error eXtinction (TREX), and Zero-Noise Extrapolation (ZNE) with Probabilistic Error Amplification (PEA) and gate folding amplification methods.
 2. Functionality for computing a postselected noise channel, from circuit symmetries or spacetime checks, to be used with PEC to reduce sampling overhead
 3. Postselection using bit-flip checks for filtering out non-Markovian noise from measured samples
 4. Support for expectation value calculation with advanced error mitigation
