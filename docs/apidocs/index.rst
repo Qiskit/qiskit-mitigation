@@ -15,7 +15,7 @@
 
    qiskit_mitigation.mitigation_task
    qiskit_mitigation.PEC
-   qiskit_mitigation.extrapolation
+   qiskit_mitigation.zne
    qiskit_mitigation.trex
    qiskit_mitigation.noise
    qiskit_mitigation.utils

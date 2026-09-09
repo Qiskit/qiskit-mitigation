@@ -10,7 +10,7 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Executor-based expectation value calculation using Zero Noise Extrapolation (ZNE) mitigation method."""
+"""Executor-based expectation value calculation using Zero Noise Extrapolation (ZNE) with gate folding mitigation method."""
 
 from __future__ import annotations
 
@@ -19,11 +19,15 @@ from collections.abc import Callable, Sequence
 from typing import Any, Literal, cast
 
 import numpy as np
-from qiskit import QuantumCircuit
+from qiskit.circuit import Gate, QuantumCircuit
+from qiskit.circuit.library import CXGate, CYGate, CZGate, ECRGate, SwapGate
+from qiskit.converters import circuit_to_dag
+from qiskit.dagcircuit import DAGCircuit
 from qiskit.primitives import DataBin, PubResult
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, PauliList, SparsePauliOp
 from qiskit.transpiler import PassManager
+from qiskit.transpiler.basepasses import TransformationPass
 from samplomatic import build
 from samplomatic.quantum_program import (
     QuantumProgram,
@@ -32,12 +36,6 @@ from samplomatic.quantum_program import (
     SamplexItem,
 )
 
-from qiskit_mitigation.extrapolation.extrapolation_utils import (
-    ExtrapolatorType,
-    _process_extrapolated_expectation_values,
-    _validate_noise_factors,
-)
-from qiskit_mitigation.extrapolation.gate_folding import GateFolding
 from qiskit_mitigation.mitigation_task import MitigationTask
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.utils.expectation_values import (
@@ -47,12 +45,104 @@ from qiskit_mitigation.utils.measurement_bases import (
     _convert_pauli_basis,
     _identify_measure_basis,
 )
+from qiskit_mitigation.zne.extrapolation import (
+    ExtrapolatorType,
+    _process_extrapolated_expectation_values,
+    _validate_noise_factors,
+)
+
+SUPPORTED_FOLDED_GATES: tuple[type, ...] = (ECRGate, CXGate, CYGate, CZGate, SwapGate)
+"""2-qubit gate types supported for folding."""
 
 
-class ZNE(MitigationTask):
-    """Calculates expectation values of observables using Zero Noise Extrapolation (ZNE) mitigation method.
+class GateFoldingPass(TransformationPass):
+    r"""Transpiler pass that folds 2-qubit gates to amplify their noise.
 
-    The class enables preparing a QuantumProgram with circuit mitigated using ZNE method,
+    Each foldable gate :math:`U` is replaced by :math:`U(U^\dagger U)^n` where
+    :math:`n = (F - 1) / 2` for noise factor :math:`F \geq 1`. When ``noise_factor``
+    is not such that every gate folds the same number of times, a subset of gates
+    is folded one extra time; ``method`` controls which subset.
+
+    Only gates in :data:`~qiskit_mitigation.zne.gate_folding.SUPPORTED_FOLDED_GATES`
+    will be folded.
+
+    Args:
+        noise_factor: Target noise factor (``>= 1``).
+        method: How to choose a subset of gates to fold an additional time
+            to implement noise factors other than odd integers. The gates
+            may be chosen from the ``front`` or ``back`` of the circuit, or
+            uniformly at ``random``.
+        seed: Random seed/generator for selecting gates at random.
+
+    Raises:
+        ValueError: If ``noise_factor`` is less than 1.
+    """
+
+    def __init__(
+        self,
+        noise_factor: float,
+        method: Literal["random", "front", "back"] = "random",
+        seed: int | np.random.BitGenerator | np.random.Generator | None = None,
+    ):
+        """Initialize a GateFoldingPass."""
+        super().__init__()
+        if noise_factor < 1:
+            raise ValueError(f"noise_factor must be >= 1, got {noise_factor}.")
+        self.noise_factor = noise_factor
+        self.method = method
+        self.seed = seed
+
+    def run(self, dag: DAGCircuit) -> DAGCircuit:
+        """Fold ``dag`` in place and return it."""
+        if np.isclose(self.noise_factor, 1):
+            return dag
+
+        # Get number of folds for each gate and the fraction of gates which get an additional fold
+        base_folds = int((self.noise_factor - 1) // 2)
+        fractional = ((self.noise_factor - 1) % 2) / 2
+
+        # All nodes to fold
+        fold_nodes = [
+            n for n in dag.topological_op_nodes() if isinstance(n.op, SUPPORTED_FOLDED_GATES)
+        ]
+
+        # Select the nodes which get an extra fold
+        extra_indices: set[int] = set()
+        num_nodes = len(fold_nodes)
+        num_extra_target = fractional * num_nodes
+        if not np.isclose(num_extra_target, 0):
+            num_extra = max(1, round(num_extra_target))
+            if self.method == "front":
+                extra_indices = set(range(num_extra))
+            elif self.method == "back":
+                extra_indices = set(range(num_nodes - num_extra, num_nodes))
+            else:
+                rng = np.random.default_rng(self.seed)
+                extra_indices = set(rng.choice(num_nodes, num_extra, replace=False))
+
+        # Perform folding
+        for i, node in enumerate(fold_nodes):
+            folds = base_folds + (i in extra_indices)
+            if folds:
+                dag.substitute_node_with_dag(node, _folded_gate(node.op, folds))
+
+        return dag
+
+
+def _folded_gate(gate: Gate, num_folds: int) -> DAGCircuit:
+    """Return a DAGCircuit that implements ``gate`` repeated ``2 * num_folds + 1`` times."""
+    qc = QuantumCircuit(gate.num_qubits, name=f"{gate.name}**{2 * num_folds + 1}")
+    qc.append(gate, range(gate.num_qubits))
+    for _ in range(num_folds):
+        qc.append(gate.inverse(), range(gate.num_qubits))
+        qc.append(gate, range(gate.num_qubits))
+    return circuit_to_dag(qc)
+
+
+class GateFolding(MitigationTask):
+    """Calculates expectation values of observables using Zero Noise Extrapolation (ZNE) with gate folding mitigation method.
+
+    The class enables preparing a QuantumProgram with circuit mitigated using ZNE with gate folding method,
     that can be executed on hardware using the Executor, and post process the results to calculate mitigated
     expectation values of given observables.
     The task parameters should be given as input to the prepare function, and the relevant
@@ -60,24 +150,24 @@ class ZNE(MitigationTask):
 
     .. code-block:: python
 
-        zne_task = ZNE()
-        program = zne_task.prepare(circuit=circuit,
+        gf_task = GateFolding()
+        program = gf_task.prepare(circuit=circuit,
                                observables=observables,
                                parameters=parameter_values,
                                noise_factors=noise_factors_array,
                                extrapolator=extrapolators_list)
         job = executor.run(program)
         results = job.result()
-        mitigated_result = zne_task.postprocess(results)
+        mitigated_result = gf_task.postprocess(results)
 
-    To calculate expectation values of a loaded job result, a ZNE task can be created from the job results with all the internal variables needed for post-processing.
+    To calculate expectation values of a loaded job result, a GateFolding task can be created from the job results with all the internal variables needed for post-processing.
     Alternatively, the variables required for post-processing can be given as input directly to the ``compute_expectation_value`` static method.
     Example for running post-processing for a loaded result:
 
     .. code-block:: python
 
-        zne_task = ZNE()
-        program = zne_task.prepare(circuit=circuit,
+        gf_task = GateFolding()
+        program = gf_task.prepare(circuit=circuit,
                                observables=observables,
                                parameters=parameter_values,
                                noise_factors=noise_factors_array,
@@ -86,13 +176,13 @@ class ZNE(MitigationTask):
 
         job = service.job(job_id)
         results = job.result()
-        zne_task = load_tasks_from_result(results)[0]
-        mitigated_result = zne_task.postprocess(results)
+        gf_task = load_tasks_from_result(results)[0]
+        mitigated_result = gf_task.postprocess(results)
 
     """
 
     def __init__(self):
-        """Instantiate a ZNE task."""
+        """Instantiate a GateFolding task."""
         super().__init__()
         self.noise_factors = None
         self.extrapolator = None
@@ -110,7 +200,7 @@ class ZNE(MitigationTask):
         measurement layer with a dedicated register name. Then, it uses the
         :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` to group the operations in a
         circuit into boxes.
-        The function forces the boxing options to contain options that are needed for a ZNE mitigated circuit.
+        The function forces the boxing options to contain options that are needed for a GateFolding mitigated circuit.
 
         Args:
             circuit: The circuit to group into boxes.
@@ -123,7 +213,7 @@ class ZNE(MitigationTask):
             ValueError: If ``boxing_options["enable_measures"]`` is False.
             ValueError: If the boxing pass manager fails to run.
         """
-        # The default boxing options for ZNE are different from samplomatic defaults
+        # The default boxing options for GateFolding are different from samplomatic defaults
         if boxing_options is None:
             boxing_options = {"enable_gates": False}
 
@@ -173,9 +263,9 @@ class ZNE(MitigationTask):
         extrapolator: Sequence[ExtrapolatorType] | None = None,
         extrapolated_noise_factors: list[float] | None = None,
     ) -> QuantumProgram:
-        """Creates a :class:`~.QuantumProgram` with ZNE mitigated item for executing via Executor.
+        """Creates a :class:`~.QuantumProgram` with GateFolding mitigated item for executing via Executor.
 
-        Creates an item for a :class:`~.QuantumProgram`, that can be executed via Executor and is ZNE mitigated
+        Creates an item for a :class:`~.QuantumProgram`, that can be executed via Executor and is GateFolding mitigated
         (amplifies the noise using gate folding techniques and extrapolates to the zero noise point).
         If a ``quantum_program`` is provided, the new item will be added to the existing program,
         otherwise, a new program will be created, containing only the created item.
@@ -220,11 +310,11 @@ class ZNE(MitigationTask):
                 Used for saving the data for easy post-processing. Can be overwritten in the post-processing.
 
         Returns:
-            A :class:`~.QuantumProgram` with ZNE mitigated item that can be executed via Executor.
+            A :class:`~.QuantumProgram` with GateFolding mitigated item that can be executed via Executor.
         """
         if folding_method not in ["random", "front", "back"]:
             raise ValueError(
-                "Must choose a gate folding noise amplification method for ZNE mitigation."
+                "Must choose a gate folding noise amplification method for GateFolding mitigation."
             )
         # add measurement twirls to the task if TREX is on
         if trex is not None:
@@ -264,7 +354,7 @@ class ZNE(MitigationTask):
 
         samplex_items = []
         for noise_factor in self.noise_factors:
-            folding_pm = PassManager([GateFolding(noise_factor, folding_method)])
+            folding_pm = PassManager([GateFoldingPass(noise_factor, folding_method)])
             folded_circuit = folding_pm.run(circuit)
 
             boxed_circuit = self._box_circuit(folded_circuit, self.custom_boxing_options)
@@ -305,7 +395,7 @@ class ZNE(MitigationTask):
         )
         data_for_passthrough = {
             "version": self.VERSION,
-            "mitigation": "zne",
+            "mitigation": "gate_folding",
             "circuit_metadata": circuit.metadata,
             "observables": self.observables.tolist(),
             "param_basis_pairs": self.param_basis_pairs,
@@ -337,10 +427,10 @@ class ZNE(MitigationTask):
         ]
         | None = None,
     ) -> PubResult:
-        """Process expectation values for a single zne task result.
+        """Process expectation values for a single GateFolding task result.
 
         Args:
-            results: The execution results. Can be either the entire results object or the zne mitigated items of this task.
+            results: The execution results. Can be either the entire results object or the gate folding mitigated items of this task.
                 If TREX calibration task is added to the quantum program, its results will be used to compute the measure noise data if the entire results object is provided.
             noise_factors: The noise factors that were used to amplify the noise.
             extrapolated_noise_factors: Noise factors to evaluate the fits at.
@@ -401,7 +491,7 @@ class ZNE(MitigationTask):
             results, measure_noise_data
         )
 
-        return self.compute_expectation_value_zne(
+        return self.compute_expectation_value_gate_folding(
             item_results,
             observables=self.observables,
             param_shape=self.param_shape,
@@ -528,8 +618,8 @@ class ZNE(MitigationTask):
         # Loop over the broadcast output shape
         for bcast_index in np.ndindex(output_shape):
             # Unbroadcast to get the actual parameter and observable indices
-            param_index = ZNE._unbroadcast_index(bcast_index, param_shape)
-            obs_index = ZNE._unbroadcast_index(bcast_index, observables.shape)
+            param_index = GateFolding._unbroadcast_index(bcast_index, param_shape)
+            obs_index = GateFolding._unbroadcast_index(bcast_index, observables.shape)
 
             # Get the observable for this index
             observable = observables[obs_index]
@@ -662,8 +752,8 @@ class ZNE(MitigationTask):
     @staticmethod
     def create_instance_from_passthrough_data(
         passthrough: dict[str, Any], trex: TREX | None = None
-    ) -> ZNE:
-        """Create a ZNE instance from a passthrough dictionary loaded from a quantum program execution result.
+    ) -> GateFolding:
+        """Create a GateFolding instance from a passthrough dictionary loaded from a quantum program execution result.
 
         Args:
             passthrough: Passthrough_data dictionary loaded from a quantum program execution result.
@@ -672,7 +762,7 @@ class ZNE(MitigationTask):
                 part of thq same quantum program.
 
         Returns:
-            A ZNE instance.
+            A GateFolding instance.
         """
         if (observables := passthrough.get("observables")) is None:
             raise ValueError("Missing 'observables' in passthrough data.")
@@ -692,22 +782,22 @@ class ZNE(MitigationTask):
         extrapolator = passthrough.get("extrapolator")
         extrapolated_noise_factors = passthrough.get("extrapolated_noise_factors")
 
-        zne = ZNE()
-        zne.observables = ObservablesArray.coerce(observables)
-        zne.param_basis_pairs = param_basis_pairs
-        zne.param_shape = param_shape
-        zne.broadcast_obs_and_params = broadcast_obs_and_params
-        zne.meas_bases = meas_bases
-        zne._program_item_index = program_item_index
-        zne.noise_factors = noise_factors
-        zne.extrapolator = extrapolator
-        zne.extrapolated_noise_factors = extrapolated_noise_factors
-        zne.trex = trex
+        gf = GateFolding()
+        gf.observables = ObservablesArray.coerce(observables)
+        gf.param_basis_pairs = param_basis_pairs
+        gf.param_shape = param_shape
+        gf.broadcast_obs_and_params = broadcast_obs_and_params
+        gf.meas_bases = meas_bases
+        gf._program_item_index = program_item_index
+        gf.noise_factors = noise_factors
+        gf.extrapolator = extrapolator
+        gf.extrapolated_noise_factors = extrapolated_noise_factors
+        gf.trex = trex
 
-        return zne
+        return gf
 
     @staticmethod
-    def compute_expectation_value_zne(
+    def compute_expectation_value_gate_folding(
         item_results: list[QuantumProgramItemResult],
         observables: ObservablesArray | Sequence[SparsePauliOp],
         param_shape: tuple[int, ...] | None,
@@ -725,7 +815,7 @@ class ZNE(MitigationTask):
     ) -> PubResult:
         """Process expectation values for a single item result.
 
-        This function can be used to calculate expectation values for a single zne mitigated item result without instantiating a new class instance.
+        This function can be used to calculate expectation values for a single gate_folding mitigated item result without instantiating a new class instance.
 
         Args:
             item_results: List of the item results - one for each noise factor.
@@ -835,7 +925,7 @@ class ZNE(MitigationTask):
                     observables_arr = ObservablesArray(
                         np.repeat(observables_arr[..., np.newaxis], param_shape, axis=1)
                     )
-                param_basis_pairs = ZNE._compute_param_basis_pairs(
+                param_basis_pairs = GateFolding._compute_param_basis_pairs(
                     observables_arr, param_shape, broadcast_shape, meas_bases
                 )
 
@@ -878,7 +968,7 @@ class ZNE(MitigationTask):
             extrapolated_exp_vals,
             extrapolated_stds,
             selected_extrapolators,
-        ) = ZNE._calculate_extrapolated_expectation_values(
+        ) = GateFolding._calculate_extrapolated_expectation_values(
             np.array(noise_amplified_data),
             observables_arr,
             param_shape,

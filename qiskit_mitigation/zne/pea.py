@@ -30,13 +30,13 @@ from samplomatic.quantum_program import (
     SamplexItem,
 )
 
-from qiskit_mitigation.extrapolation.extrapolation_utils import (
+from qiskit_mitigation.mitigation_task import MitigationTask
+from qiskit_mitigation.trex import TREX
+from qiskit_mitigation.zne.extrapolation import (
     ExtrapolatorType,
     _validate_noise_factors,
 )
-from qiskit_mitigation.extrapolation.zne import ZNE
-from qiskit_mitigation.mitigation_task import MitigationTask
-from qiskit_mitigation.trex import TREX
+from qiskit_mitigation.zne.gate_folding import GateFolding
 
 
 class PEA(MitigationTask):
@@ -604,7 +604,7 @@ class PEA(MitigationTask):
             extrapolated_exp_vals,
             extrapolated_stds,
             selected_extrapolators,
-        ) = ZNE._calculate_extrapolated_expectation_values(
+        ) = GateFolding._calculate_extrapolated_expectation_values(
             data,
             observables_arr,
             param_shape,

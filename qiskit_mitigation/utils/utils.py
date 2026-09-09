@@ -38,11 +38,11 @@ def load_tasks_from_result(
     Returns:
         List of ``MitigationTask`` objects that created the program of the given result.
     """
-    from qiskit_mitigation.extrapolation.pea import PEA
-    from qiskit_mitigation.extrapolation.zne import ZNE
     from qiskit_mitigation.mitigation_task import MitigationTask
     from qiskit_mitigation.pec import PEC
     from qiskit_mitigation.trex import TREX
+    from qiskit_mitigation.zne.gate_folding import GateFolding
+    from qiskit_mitigation.zne.pea import PEA
 
     if not isinstance(passthrough := result.passthrough_data, dict):
         raise ValueError(
@@ -77,8 +77,10 @@ def load_tasks_from_result(
                 )
             case "pec":
                 tasks.append(PEC.create_instance_from_passthrough_data(task_passthrough, trex))
-            case "zne":
-                tasks.append(ZNE.create_instance_from_passthrough_data(task_passthrough, trex))
+            case "gate_folding":
+                tasks.append(
+                    GateFolding.create_instance_from_passthrough_data(task_passthrough, trex)
+                )
             case "pea":
                 tasks.append(PEA.create_instance_from_passthrough_data(task_passthrough, trex))
             case "trex":

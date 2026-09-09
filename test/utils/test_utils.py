@@ -21,14 +21,14 @@ from qiskit import QuantumCircuit
 from qiskit.circuit import BoxOp, CircuitInstruction, Gate
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_mitigation import PEC, MitigationTask
-from qiskit_mitigation.extrapolation.pea import PEA
-from qiskit_mitigation.extrapolation.zne import ZNE
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.utils.utils import (
     _find_box_type,
     find_combined_unique_layers,
     load_tasks_from_result,
 )
+from qiskit_mitigation.zne.gate_folding import GateFolding
+from qiskit_mitigation.zne.pea import PEA
 from samplomatic.quantum_program import QuantumProgramResult
 
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ class TestLoadTasksFromResultPassthroughType(unittest.TestCase):
 
     def test_raises_when_passthrough_is_list(self):
         """List passthrough_data must raise ValueError."""
-        result = _make_result(passthrough_data=[{"mitigation": "zne"}])
+        result = _make_result(passthrough_data=[{"mitigation": "gate_folding"}])
         with self.assertRaises(ValueError):
             load_tasks_from_result(result)
 
@@ -221,12 +221,12 @@ class TestLoadTasksFromResultWithTrex(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# load_tasks_from_result — PEC, ZNE and PEA task types
+# load_tasks_from_result — PEC, GateFolding and PEA task types
 # ---------------------------------------------------------------------------
 
 
 class TestLoadTasksFromResultMitigationTypes(unittest.TestCase):
-    """Tests that PEC, ZNE and PEA passthrough types are dispatched correctly."""
+    """Tests that PEC, GateFolding and PEA passthrough types are dispatched correctly."""
 
     def _pec_passthrough(self, **extra):
         data = {
@@ -243,9 +243,9 @@ class TestLoadTasksFromResultMitigationTypes(unittest.TestCase):
         data.update(extra)
         return data
 
-    def _zne_passthrough(self, **extra):
+    def _gate_folding_passthrough(self, **extra):
         data = {
-            "mitigation": "zne",
+            "mitigation": "gate_folding",
             "trex_calibration": False,
             "observables": SparsePauliOp("ZZ"),
             "param_basis_pairs": None,
@@ -284,12 +284,12 @@ class TestLoadTasksFromResultMitigationTypes(unittest.TestCase):
         self.assertEqual(len(tasks), 1)
         self.assertIsInstance(tasks[0], PEC)
 
-    def test_zne_task_loaded_correctly(self):
-        """A 'zne' mitigation entry must produce a ZNE instance."""
-        result = _make_result({"qiskit_mitigation": [self._zne_passthrough()]})
+    def test_gate_folding_task_loaded_correctly(self):
+        """A 'GateFolding' mitigation entry must produce a GateFolding instance."""
+        result = _make_result({"qiskit_mitigation": [self._gate_folding_passthrough()]})
         tasks = load_tasks_from_result(result)
         self.assertEqual(len(tasks), 1)
-        self.assertIsInstance(tasks[0], ZNE)
+        self.assertIsInstance(tasks[0], GateFolding)
 
     def test_pea_task_loaded_correctly(self):
         """A 'pea' mitigation entry must produce a PEA instance."""
@@ -647,7 +647,7 @@ class TestTREXCreateInstanceFromPassthroughData(unittest.TestCase):
     def test_raises_when_mitigation_is_not_trex(self):
         """A passthrough dict with a mitigation type other than ``'trex'`` must raise ``ValueError``."""
         with self.assertRaises(ValueError, msg="Should raise for wrong mitigation type"):
-            TREX.create_instance_from_passthrough_data({"mitigation": "zne"})
+            TREX.create_instance_from_passthrough_data({"mitigation": "gate_folding"})
 
     def test_raises_when_mitigation_key_missing(self):
         """A passthrough dict with no ``'mitigation'`` key must raise ``ValueError``."""
