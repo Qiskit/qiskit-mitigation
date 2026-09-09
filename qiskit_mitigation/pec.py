@@ -123,24 +123,25 @@ class PEC(MitigationTask):
         if boxing_options is None:
             boxing_options = {}
         # Force PEC related options
-        if "enable_gates" not in boxing_options:
-            boxing_options["enable_gates"] = True
-        elif not boxing_options["enable_gates"]:
+        edited_boxing_options = boxing_options.copy()
+        if "enable_gates" not in edited_boxing_options:
+            edited_boxing_options["enable_gates"] = True
+        elif not edited_boxing_options["enable_gates"]:
             raise ValueError('boxing_options["enable_gates"] may not be False')
-        if "inject_noise_targets" not in boxing_options:
-            boxing_options["inject_noise_targets"] = "gates"
-        elif boxing_options["inject_noise_targets"] not in ["gates", "all"]:
+        if "inject_noise_targets" not in edited_boxing_options:
+            edited_boxing_options["inject_noise_targets"] = "gates"
+        elif edited_boxing_options["inject_noise_targets"] not in ["gates", "all"]:
             raise ValueError(
                 'boxing_options["inject_noise_targets"] must be one of "gates" or "all".'
             )
-        if "inject_noise_strategy" not in boxing_options:
-            boxing_options["inject_noise_strategy"] = "uniform_modification"
-        elif boxing_options["inject_noise_strategy"] == "no_modification":
+        if "inject_noise_strategy" not in edited_boxing_options:
+            edited_boxing_options["inject_noise_strategy"] = "uniform_modification"
+        elif edited_boxing_options["inject_noise_strategy"] == "no_modification":
             raise ValueError(
                 'boxing_options["inject_noise_strategy"] may not be ``no_modification``.'
             )
 
-        return super()._box_circuit(circuit, boxing_options)
+        return super()._box_circuit(circuit, edited_boxing_options)
 
     def prepare(
         self,
@@ -617,7 +618,7 @@ class PEC(MitigationTask):
                 each other.
         """
         try:
-            data = item_result["_meas"]
+            data = item_result["_meas"].copy()
         except KeyError as ex:
             raise ValueError("Dedicated creg ``'_meas'`` is missing from the results.") from ex
 
@@ -646,7 +647,7 @@ class PEC(MitigationTask):
 
             # Apply measurement flips if present
             if "measurement_flips._meas" in item_result:
-                data ^= item_result.pop("measurement_flips._meas")
+                data ^= item_result["measurement_flips._meas"]
 
             if isinstance(observables, SparsePauliOp):
                 observables = ObservablesArray.coerce(observables)
@@ -676,11 +677,7 @@ class PEC(MitigationTask):
                 f"``item_result['_meas']`` has ``{data.ndim}`` axes, expected ``4`` or ``5``."
             )
 
-        meas_flips = (
-            item_result.pop("measurement_flips._meas")
-            if "measurement_flips._meas" in item_result
-            else None
-        )
+        meas_flips = item_result.get("measurement_flips._meas", None)
         if isinstance(observables, ObservablesArray):
             observables = [
                 SparsePauliOp.from_sparse_observable(sparse_obs)
