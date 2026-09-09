@@ -111,9 +111,7 @@ class TestPECBoxCircuit(unittest.TestCase):
         """``enable_gates=True`` must be forwarded to ``generate_boxing_pass_manager``
         even when absent from the caller's dict, and the original dict must be untouched."""
         options = {}
-        with patch(
-            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.pec._box_circuit(self.circuit, options)
@@ -126,9 +124,7 @@ class TestPECBoxCircuit(unittest.TestCase):
         """``inject_noise_targets='gates'`` must be forwarded to ``generate_boxing_pass_manager``
         even when absent from the caller's dict, and the original dict must be untouched."""
         options = {}
-        with patch(
-            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.pec._box_circuit(self.circuit, options)
@@ -141,9 +137,7 @@ class TestPECBoxCircuit(unittest.TestCase):
         """``inject_noise_strategy='uniform_modification'`` must be forwarded to
         ``generate_boxing_pass_manager`` even when absent, and the original dict must be untouched."""
         options = {}
-        with patch(
-            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.pec._box_circuit(self.circuit, options)

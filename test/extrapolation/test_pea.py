@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import unittest
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -152,9 +152,7 @@ class TestPEABoxCircuit(unittest.TestCase):
         """``enable_gates=True`` must be forwarded to ``generate_boxing_pass_manager``
         even when absent from the caller's dict, and the original dict must be untouched."""
         options: dict = {}
-        with patch(
-            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.pea._box_circuit(self.circuit, options)
@@ -179,9 +177,7 @@ class TestPEABoxCircuit(unittest.TestCase):
         """``inject_noise_targets='gates'`` must be forwarded to ``generate_boxing_pass_manager``
         even when absent from the caller's dict, and the original dict must be untouched."""
         options: dict = {}
-        with patch(
-            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.pea._box_circuit(self.circuit, options)
@@ -206,9 +202,7 @@ class TestPEABoxCircuit(unittest.TestCase):
         """``inject_noise_strategy='uniform_modification'`` must be forwarded to
         ``generate_boxing_pass_manager`` even when absent, and the original dict must be untouched."""
         options: dict = {}
-        with patch(
-            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.pea._box_circuit(self.circuit, options)

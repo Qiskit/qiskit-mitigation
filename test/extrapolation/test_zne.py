@@ -149,9 +149,7 @@ class TestZNEBoxCircuit(unittest.TestCase):
         to ``generate_boxing_pass_manager`` even when absent from the caller's dict, and the
         original dict must be untouched."""
         options: dict = {}
-        with patch(
-            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.zne._box_circuit(self.circuit, options)

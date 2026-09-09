@@ -639,9 +639,7 @@ class TestTREXBoxCircuit(unittest.TestCase):
         ``generate_boxing_pass_manager`` even when absent from the caller's dict, and the
         original dict must be untouched."""
         options: dict = {}
-        with patch(
-            "qiskit_mitigation.trex.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.trex._box_circuit(self.circuit, options)
@@ -655,9 +653,7 @@ class TestTREXBoxCircuit(unittest.TestCase):
     def test_none_options_forwards_twirl_defaults(self):
         """``None`` boxing_options must cause ``enable_measures=True`` and
         ``measure_annotations='twirl'`` to be forwarded to ``generate_boxing_pass_manager``."""
-        with patch(
-            "qiskit_mitigation.trex.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.trex._box_circuit(self.circuit, None)
@@ -708,9 +704,7 @@ class TestTREXBoxCircuit(unittest.TestCase):
         """When ``enable_measures`` is already in the input, the original dict must still
         be untouched after the call."""
         options = {"enable_measures": True, "measure_annotations": "twirl"}
-        with patch(
-            "qiskit_mitigation.trex.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.trex._box_circuit(self.circuit, options)

@@ -220,9 +220,7 @@ class TestBoxCircuit(unittest.TestCase):
         even when absent from the caller's dict, and the original dict must be untouched."""
         options = {}
         qc = _simple_circuit()
-        with patch(
-            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.task._box_circuit(qc, options)
@@ -235,9 +233,7 @@ class TestBoxCircuit(unittest.TestCase):
         """``measure_annotations='change_basis'`` must be forwarded to
         ``generate_boxing_pass_manager`` even when absent, and the original dict must be untouched."""
         options = {}
-        with patch(
-            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             self.task._box_circuit(_simple_circuit(), options)
@@ -278,9 +274,7 @@ class TestBoxCircuit(unittest.TestCase):
         to ``generate_boxing_pass_manager``, and the original dict must be untouched."""
         options = {"enable_measures": True, "measure_annotations": "twirl"}
         qc = _simple_circuit()
-        with patch(
-            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
-        ) as mock_gen:
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
             mock_gen.return_value = MagicMock()
             mock_gen.return_value.run.return_value = MagicMock()
             MitigationTask._box_circuit(qc, options)

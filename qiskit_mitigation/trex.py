@@ -97,9 +97,12 @@ class TREX:
         trex_task._program_item_index = program_item_index
         return trex_task
 
-    def prepare(self, num_randomizations: int,
-                quantum_program: QuantumProgram,
-                custom_boxing_options: dict | None = None) -> QuantumProgram:
+    def prepare(
+        self,
+        num_randomizations: int,
+        quantum_program: QuantumProgram,
+        custom_boxing_options: dict | None = None,
+    ) -> QuantumProgram:
         """Adds a TREX calibration item to the quantum program.
 
         Args:
@@ -153,9 +156,9 @@ class TREX:
 
     @classmethod
     def _box_circuit(
-            cls,
-            circuit: QuantumCircuit,
-            boxing_options: dict | None,
+        cls,
+        circuit: QuantumCircuit,
+        boxing_options: dict | None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -184,8 +187,8 @@ class TREX:
         elif not edited_boxing_options["enable_measures"]:
             raise ValueError('boxing_options["enable_measures"] may not be False.')
         if (
-                "measure_annotations" in edited_boxing_options
-                and edited_boxing_options["measure_annotations"] != "twirl"
+            "measure_annotations" in edited_boxing_options
+            and edited_boxing_options["measure_annotations"] != "twirl"
         ):
             raise ValueError('boxing_options["measure_annotations"] must be `twirl`.')
         try:
