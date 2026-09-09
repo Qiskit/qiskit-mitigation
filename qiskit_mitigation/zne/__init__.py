@@ -11,14 +11,13 @@
 # that they have been altered from the originals.
 
 # Reminder: update the RST file in docs/apidocs when adding new interfaces.
-"""Extrapolation based mitigation methods."""
+"""Mitigation methods based on Zero Noise Extrapolation technique."""
 
-from .gate_folding import GateFolding
+from .gate_folding import GateFolding, GateFoldingPass
 from .pea import PEA
-from .zne import ZNE
 
 __all__ = [
     "PEA",
-    "ZNE",
     "GateFolding",
+    "GateFoldingPass",
 ]

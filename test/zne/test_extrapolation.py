@@ -17,7 +17,7 @@ import warnings
 
 import numpy as np
 from ddt import data, ddt, unpack
-from qiskit_mitigation.extrapolation.extrapolation_utils import (
+from qiskit_mitigation.zne.extrapolation import (
     _as_noise_factors,
     _build_model_spec,
     _clamp_degenerate_stds,

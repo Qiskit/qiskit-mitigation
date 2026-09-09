@@ -10,7 +10,7 @@
 # copyright notice, and modified files need to carry a notice indicating
 # that they have been altered from the originals.
 
-"""Unit tests for the ZNE :class:`GateFolding` transpiler pass."""
+"""Unit tests for the ZNE :class:`GateFoldingPass` transpiler pass."""
 
 import unittest
 from typing import Any
@@ -24,20 +24,20 @@ from qiskit.converters import circuit_to_dag, dag_to_circuit
 from qiskit.quantum_info import Operator
 from qiskit.transpiler import PassManager
 from qiskit.transpiler.passes import Optimize1qGates
-from qiskit_mitigation.extrapolation.gate_folding import (
+from qiskit_mitigation.zne.gate_folding import (
     SUPPORTED_FOLDED_GATES,
-    GateFolding,
+    GateFoldingPass,
 )
 
 
 def fold(circuit: QuantumCircuit, noise_factor: float, **kwargs: Any) -> QuantumCircuit:
-    """Test helper: run ``GateFolding`` via a one-pass PassManager."""
-    return PassManager([GateFolding(noise_factor, **kwargs)]).run(circuit)
+    """Test helper: run ``GateFoldingPass`` via a one-pass PassManager."""
+    return PassManager([GateFoldingPass(noise_factor, **kwargs)]).run(circuit)
 
 
 @ddt.ddt
-class TestGateFolding(unittest.TestCase):
-    """Tests for ``GateFolding``."""
+class TestGateFoldingPass(unittest.TestCase):
+    """Tests for ``GateFoldingPass``."""
 
     def test_default_gate_set(self):
         """Default gate set targets the standard 2-qubit ISA gates."""
@@ -103,7 +103,7 @@ class TestGateFolding(unittest.TestCase):
     def test_noise_factor_less_than_one_raises(self):
         """``noise_factor < 1`` raises ``ValueError`` at pass construction."""
         with self.assertRaises(ValueError):
-            GateFolding(0.5)
+            GateFoldingPass(0.5)
 
     def test_method_front_picks_first_gates(self):
         """``method='front'`` selects probabilistic folds from the start of the DAG."""
@@ -156,20 +156,20 @@ class TestGateFolding(unittest.TestCase):
         circuit = QuantumCircuit(2)
         circuit.cx(0, 1)
         circuit.cx(0, 1)
-        folded_dag = GateFolding(3.0).run(circuit_to_dag(circuit))
+        folded_dag = GateFoldingPass(3.0).run(circuit_to_dag(circuit))
         self.assertEqual(dag_to_circuit(folded_dag).count_ops()["cx"], 6)
 
     def test_composes_in_passmanager_with_other_passes(self):
-        """``GateFolding`` plays nicely with another pass in a PassManager stack."""
+        """``GateFoldingPass`` plays nicely with another pass in a PassManager stack."""
         circuit = QuantumCircuit(2)
         circuit.cx(0, 1)
         circuit.cx(0, 1)
-        pm = PassManager([Optimize1qGates(), GateFolding(3.0)])
+        pm = PassManager([Optimize1qGates(), GateFoldingPass(3.0)])
         self.assertEqual(pm.run(circuit).count_ops()["cx"], 6)
 
     def test_same_pass_instance_on_different_circuits(self):
         """One pass instance can be applied to different circuits with independent results."""
-        pm = PassManager([GateFolding(3.0)])
+        pm = PassManager([GateFoldingPass(3.0)])
         qc1 = QuantumCircuit(2)
         qc1.cx(0, 1)
         qc2 = QuantumCircuit(2)
@@ -192,7 +192,7 @@ class TestGateFolding(unittest.TestCase):
         circuit.cx(0, 1)
         circuit.cx(0, 1)
         dag = circuit_to_dag(circuit)
-        out = GateFolding(3.0).run(dag)
+        out = GateFoldingPass(3.0).run(dag)
         self.assertIs(out, dag)
         self.assertEqual(dag_to_circuit(dag).count_ops()["cx"], 6)
 

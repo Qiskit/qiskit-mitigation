@@ -15,18 +15,18 @@
 # we should set up its RST file.
 """Qiskit mitigation Python API."""
 
-from .extrapolation.pea import PEA
-from .extrapolation.zne import ZNE
 from .mitigation_task import MitigationTask
 from .pec import PEC
 from .trex import TREX
 from .utils.utils import find_combined_unique_layers, load_tasks_from_result
+from .zne.gate_folding import GateFolding
+from .zne.pea import PEA
 
 __all__ = [
     "PEA",
     "PEC",
     "TREX",
-    "ZNE",
+    "GateFolding",
     "MitigationTask",
     "find_combined_unique_layers",
     "load_tasks_from_result",
