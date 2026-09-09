@@ -140,16 +140,17 @@ class MitigationTask:
         """
         if boxing_options is None:
             boxing_options = {}
-        if "enable_measures" not in boxing_options:
-            boxing_options["enable_measures"] = True
-            boxing_options["measure_annotations"] = "change_basis"
-        elif not boxing_options["enable_measures"]:
+        edited_boxing_options = boxing_options.copy()
+        if "enable_measures" not in edited_boxing_options:
+            edited_boxing_options["enable_measures"] = True
+            edited_boxing_options["measure_annotations"] = "change_basis"
+        elif not edited_boxing_options["enable_measures"]:
             raise ValueError('boxing_options["enable_measures"] may not be False.')
         if (
-            "measure_annotations" in boxing_options
-            and boxing_options["measure_annotations"] == "twirl"
+            "measure_annotations" in edited_boxing_options
+            and edited_boxing_options["measure_annotations"] == "twirl"
         ):
-            boxing_options["measure_annotations"] = "all"
+            edited_boxing_options["measure_annotations"] = "all"
 
         # Remove any existing final measurements
         prepared_circuit = circuit.remove_final_measurements(inplace=False)
@@ -164,7 +165,7 @@ class MitigationTask:
         prepared_circuit.measure(prepared_circuit.qubits, creg)
 
         try:
-            boxing_pm = generate_boxing_pass_manager(**boxing_options)
+            boxing_pm = generate_boxing_pass_manager(**edited_boxing_options)
         except Exception as ex:
             raise ValueError(
                 f"Failed to generate boxing pass manager with the following error, {ex}"
