@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -149,10 +149,19 @@ class TestPEABoxCircuit(unittest.TestCase):
     # --- enable_gates ---
 
     def test_enable_gates_injected_when_absent(self):
-        """``enable_gates`` must be set to ``True`` when not present in ``boxing_options``."""
+        """``enable_gates=True`` must be forwarded to ``generate_boxing_pass_manager``
+        even when absent from the caller's dict, and the original dict must be untouched."""
         options: dict = {}
-        self.pea._box_circuit(self.circuit, options)
-        self.assertTrue(options["enable_gates"])
+        with patch(
+            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
+        ) as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.pea._box_circuit(self.circuit, options)
+        _, kwargs = mock_gen.call_args
+        self.assertTrue(kwargs.get("enable_gates"))
+        # Original dict must not have been mutated.
+        self.assertNotIn("enable_gates", options)
 
     def test_raises_when_enable_gates_is_false(self):
         """``boxing_options["enable_gates"] = False`` must raise ``ValueError``."""
@@ -167,10 +176,19 @@ class TestPEABoxCircuit(unittest.TestCase):
     # --- inject_noise_targets ---
 
     def test_inject_noise_targets_defaulted_to_gates(self):
-        """``inject_noise_targets`` must default to ``"gates"`` when absent."""
+        """``inject_noise_targets='gates'`` must be forwarded to ``generate_boxing_pass_manager``
+        even when absent from the caller's dict, and the original dict must be untouched."""
         options: dict = {}
-        self.pea._box_circuit(self.circuit, options)
-        self.assertEqual(options["inject_noise_targets"], "gates")
+        with patch(
+            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
+        ) as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.pea._box_circuit(self.circuit, options)
+        _, kwargs = mock_gen.call_args
+        self.assertEqual(kwargs.get("inject_noise_targets"), "gates")
+        # Original dict must not have been mutated.
+        self.assertNotIn("inject_noise_targets", options)
 
     def test_inject_noise_targets_all_is_accepted(self):
         """``inject_noise_targets="all"`` must be accepted without error."""
@@ -185,10 +203,19 @@ class TestPEABoxCircuit(unittest.TestCase):
     # --- inject_noise_strategy ---
 
     def test_inject_noise_strategy_defaulted_to_uniform_modification(self):
-        """``inject_noise_strategy`` must default to ``"uniform_modification"`` when absent."""
+        """``inject_noise_strategy='uniform_modification'`` must be forwarded to
+        ``generate_boxing_pass_manager`` even when absent, and the original dict must be untouched."""
         options: dict = {}
-        self.pea._box_circuit(self.circuit, options)
-        self.assertEqual(options["inject_noise_strategy"], "uniform_modification")
+        with patch(
+            "qiskit_mitigation.mitigation_task.generate_boxing_pass_manager"
+        ) as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.pea._box_circuit(self.circuit, options)
+        _, kwargs = mock_gen.call_args
+        self.assertEqual(kwargs.get("inject_noise_strategy"), "uniform_modification")
+        # Original dict must not have been mutated.
+        self.assertNotIn("inject_noise_strategy", options)
 
     def test_inject_noise_strategy_no_modification_raises(self):
         """``inject_noise_strategy="no_modification"`` must raise ``ValueError``."""
