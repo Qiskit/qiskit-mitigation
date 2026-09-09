@@ -145,11 +145,20 @@ class TestGateFoldingBoxCircuit(unittest.TestCase):
         self.assertIn("_meas", [reg.name for reg in boxed.cregs])
 
     def test_enable_measures_injected_when_absent(self):
-        """``enable_measures`` must be set to ``True`` on the caller's options dict."""
+        """``enable_measures=True`` and ``measure_annotations='change_basis'`` must be forwarded
+        to ``generate_boxing_pass_manager`` even when absent from the caller's dict, and the
+        original dict must be untouched."""
         options: dict = {}
-        self.gf._box_circuit(self.circuit, options)
-        self.assertTrue(options["enable_measures"])
-        self.assertEqual(options["measure_annotations"], "change_basis")
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.gf._box_circuit(self.circuit, options)
+        _, kwargs = mock_gen.call_args
+        self.assertTrue(kwargs.get("enable_measures"))
+        self.assertEqual(kwargs.get("measure_annotations"), "change_basis")
+        # Original dict must not have been mutated.
+        self.assertNotIn("enable_measures", options)
+        self.assertNotIn("measure_annotations", options)
 
     def test_raises_when_enable_measures_is_false(self):
         """A ``False`` value for ``enable_measures`` must raise ``ValueError``."""
