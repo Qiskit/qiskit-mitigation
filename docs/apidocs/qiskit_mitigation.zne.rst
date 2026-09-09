@@ -1,20 +1,19 @@
 ======================================================
-Extrapolation (:mod:`qiskit_mitigation.extrapolation`)
+ZNE (:mod:`qiskit_mitigation.zne`)
 ======================================================
 
-.. automodule:: qiskit_mitigation.extrapolation
+.. automodule:: qiskit_mitigation.zne
    :no-members:
    :no-inherited-members:
    :no-special-members:
 
-.. currentmodule:: qiskit_mitigation.extrapolation
+.. currentmodule:: qiskit_mitigation.zne
 
 .. autosummary::
    :toctree: ../stubs/
    :nosignatures:
 
-   ZNE
-   PEA
    GateFolding
+   PEA
 
-.. autodata:: qiskit_mitigation.extrapolation.gate_folding.SUPPORTED_FOLDED_GATES
+.. autodata:: qiskit_mitigation.zne.gate_folding.SUPPORTED_FOLDED_GATES

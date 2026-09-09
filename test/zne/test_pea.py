@@ -24,8 +24,8 @@ from qiskit.circuit import Parameter
 from qiskit.primitives import PubResult
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, SparsePauliOp
-from qiskit_mitigation.extrapolation.pea import PEA
 from qiskit_mitigation.trex import TREX
+from qiskit_mitigation.zne.pea import PEA
 from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
 from samplomatic.utils import get_annotation
