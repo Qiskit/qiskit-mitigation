@@ -361,6 +361,7 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
             gamma=1.0,
             param_shape=(1,),
             param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         pub2 = PEC.compute_expectation_value_pec(
             result2,
@@ -368,6 +369,7 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
             gamma=2.0,
             param_shape=(1,),
             param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub2.data.evs, 2.0 * pub1.data.evs, atol=1e-10)
 
@@ -381,6 +383,7 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
             gamma=1.0,
             param_shape=(1,),
             param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
 
@@ -394,6 +397,7 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
             gamma=1.0,
             param_shape=(1,),
             param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         self.assertIsInstance(pub_result, PubResult)
         self.assertTrue(hasattr(pub_result.data, "evs"))
@@ -415,6 +419,7 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
             gamma=1.0,
             param_shape=(1,),
             param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
 
@@ -432,6 +437,7 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
             gamma=1.0,
             param_shape=(1,),
             param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [-1.0], atol=1e-10)
 
