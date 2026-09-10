@@ -806,7 +806,7 @@ class GateFolding(MitigationTask):
         extrapolator: list[ExtrapolatorType],
         extrapolated_noise_factors: float | int | list[float] | None = None,
         meas_bases: Sequence[Pauli] | Sequence[str] | PauliList | None = None,
-        broadcast_obs_and_params: bool = True,
+        broadcast_obs_and_params: bool = False,
         measure_noise_data: PauliLindbladMap | np.ndarray | None = None,
         custom_fit: tuple[
             Callable[..., np.ndarray], list[float], tuple[float, ...] | tuple[list[float], ...]

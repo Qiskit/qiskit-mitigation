@@ -328,7 +328,11 @@ class TestComputeExpectationValue(unittest.TestCase):
         obs = self._obs("ZZ")
         result = _fake_item_result(2, 1, 4, 2, data=np.zeros((2, 1, 4, 2), dtype=bool))
         pub_result = MitigationTask.compute_expectation_value(
-            result, obs, param_shape=(1,), param_basis_pairs=[((0,), "ZZ")]
+            result,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
 
@@ -338,7 +342,11 @@ class TestComputeExpectationValue(unittest.TestCase):
         data = np.ones((2, 1, 4, 2), dtype=bool)
         result = _fake_item_result(2, 1, 4, 2, data=data)
         pub_result = MitigationTask.compute_expectation_value(
-            result, obs, param_shape=(1,), param_basis_pairs=[((0,), "ZZ")]
+            result,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
 
@@ -352,7 +360,11 @@ class TestComputeExpectationValue(unittest.TestCase):
         data[:, :, :, 1] = True  # qubit 1 = |1⟩
         result = _fake_item_result(1, 1, 4, 2, data=data)
         pub_result = MitigationTask.compute_expectation_value(
-            result, obs, param_shape=(1,), param_basis_pairs=[((0,), "ZI")]
+            result,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZI")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [-1.0], atol=1e-10)
 
@@ -364,7 +376,11 @@ class TestComputeExpectationValue(unittest.TestCase):
         flips = np.ones((2, 1, 4, 2), dtype=bool)
         result = {"_meas": data, "measurement_flips._meas": flips}
         pub_result = MitigationTask.compute_expectation_value(
-            result, obs, param_shape=(1,), param_basis_pairs=[((0,), "ZZ")]
+            result,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
 
@@ -373,7 +389,11 @@ class TestComputeExpectationValue(unittest.TestCase):
         obs = self._obs("ZZ")
         result = _fake_item_result(2, 1, 4, 2)
         pub_result = MitigationTask.compute_expectation_value(
-            result, obs, param_shape=(1,), param_basis_pairs=[((0,), "ZZ")]
+            result,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         self.assertIsInstance(pub_result, PubResult)
         self.assertTrue(hasattr(pub_result.data, "evs"))

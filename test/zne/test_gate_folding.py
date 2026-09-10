@@ -530,6 +530,7 @@ class TestComputeExpectationValueFateFolding(unittest.TestCase):
             "param_basis_pairs": [((0,), "Z")],
             "noise_factors": NOISE_FACTORS,
             "extrapolator": ["linear"],
+            "broadcast_obs_and_params": True,
         }
         params.update(kwargs)
         return GateFolding.compute_expectation_value_gate_folding(
