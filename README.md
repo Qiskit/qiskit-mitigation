@@ -1,3 +1,6 @@
+> [!NOTE]
+> This repository is under active development and the code here should not be considered stable.
+
 # Qiskit Mitigation
 
 Qiskit Mitigation is a package for handling noise in quantum computations. It contains a set of techniques that can be used to build advanced or customized error mitigation pipelines directly with [samplomatic](https://github.com/Qiskit/samplomatic). Specifically, it contains:
