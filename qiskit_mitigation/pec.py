@@ -586,7 +586,7 @@ class PEC(MitigationTask):
         param_shape: tuple[int, ...] | None = None,
         param_basis_pairs: list[tuple[tuple[int, ...], str]] | None = None,
         meas_bases: Sequence[Pauli] | Sequence[str] | PauliList | None = None,
-        broadcast_obs_and_params: bool = True,
+        broadcast_obs_and_params: bool = False,
         measure_noise_data: PauliLindbladMap | np.ndarray | None = None,
     ) -> PubResult:
         """Process expectation values for a single pec mitigated item result.
