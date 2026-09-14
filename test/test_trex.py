@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 from qiskit.circuit import QuantumCircuit
@@ -598,6 +598,171 @@ class TestAddDataToPassthroughData(unittest.TestCase):
         qp = self._mock_qp({"qiskit_mitigation": [existing]})
         TREX._add_data_to_passthrough_data(data, qp)
         self.assertNotIn("trex_calibration", existing)
+
+
+# ---------------------------------------------------------------------------
+# TREX._box_circuit
+# ---------------------------------------------------------------------------
+
+
+class TestTREXBoxCircuit(unittest.TestCase):
+    """Tests for the TREX override of :meth:`_box_circuit`."""
+
+    def setUp(self):
+        self.trex = TREX()
+        self.circuit = _simple_circuit()
+
+    # --- happy path ---
+
+    def test_returns_quantum_circuit(self):
+        """The boxed circuit must return whatever the pass manager run produces."""
+        sentinel = QuantumCircuit(2)
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = sentinel
+            result = self.trex._box_circuit(self.circuit, {})
+        self.assertIs(result, sentinel)
+
+    def test_none_options_returns_quantum_circuit(self):
+        """``None`` boxing_options must default gracefully and return a valid circuit."""
+        sentinel = QuantumCircuit(2)
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = sentinel
+            result = self.trex._box_circuit(self.circuit, None)
+        self.assertIs(result, sentinel)
+
+    # --- enable_measures default injection ---
+
+    def test_enable_measures_injected_when_absent(self):
+        """``enable_measures=True`` and ``measure_annotations='twirl'`` must be forwarded to
+        ``generate_boxing_pass_manager`` even when absent from the caller's dict, and the
+        original dict must be untouched."""
+        options: dict = {}
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.trex._box_circuit(self.circuit, options)
+        _, kwargs = mock_gen.call_args
+        self.assertTrue(kwargs.get("enable_measures"))
+        self.assertEqual(kwargs.get("measure_annotations"), "twirl")
+        # Original dict must not have been mutated.
+        self.assertNotIn("enable_measures", options)
+        self.assertNotIn("measure_annotations", options)
+
+    def test_none_options_forwards_twirl_defaults(self):
+        """``None`` boxing_options must cause ``enable_measures=True`` and
+        ``measure_annotations='twirl'`` to be forwarded to ``generate_boxing_pass_manager``."""
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.trex._box_circuit(self.circuit, None)
+        _, kwargs = mock_gen.call_args
+        self.assertTrue(kwargs.get("enable_measures"))
+        self.assertEqual(kwargs.get("measure_annotations"), "twirl")
+
+    # --- validation errors ---
+
+    def test_raises_when_enable_measures_is_false(self):
+        """A ``False`` value for ``enable_measures`` must raise ``ValueError``."""
+        with self.assertRaises(ValueError):
+            self.trex._box_circuit(self.circuit, {"enable_measures": False})
+
+    def test_raises_when_measure_annotations_is_not_twirl(self):
+        """Any ``measure_annotations`` value other than ``'twirl'`` must raise ``ValueError``."""
+        with self.assertRaises(ValueError):
+            self.trex._box_circuit(
+                self.circuit, {"enable_measures": True, "measure_annotations": "change_basis"}
+            )
+
+    def test_raises_when_measure_annotations_is_all(self):
+        """``measure_annotations='all'`` (used by TREX calibration, not _box_circuit) must raise."""
+        with self.assertRaises(ValueError):
+            self.trex._box_circuit(
+                self.circuit, {"enable_measures": True, "measure_annotations": "all"}
+            )
+
+    def test_twirl_annotation_explicit_is_accepted(self):
+        """Explicitly passing ``measure_annotations='twirl'`` must not raise."""
+        sentinel = QuantumCircuit(2)
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = sentinel
+            result = self.trex._box_circuit(
+                self.circuit, {"enable_measures": True, "measure_annotations": "twirl"}
+            )
+        self.assertIs(result, sentinel)
+
+    def test_raises_on_bad_boxing_options(self):
+        """Options rejected by ``generate_boxing_pass_manager`` must raise ``ValueError``."""
+        with self.assertRaises(ValueError):
+            self.trex._box_circuit(self.circuit, {"invalid_option_xyz": True})
+
+    # --- original dict immutability for explicit enable_measures ---
+
+    def test_original_dict_not_mutated_when_enable_measures_present(self):
+        """When ``enable_measures`` is already in the input, the original dict must still
+        be untouched after the call."""
+        options = {"enable_measures": True, "measure_annotations": "twirl"}
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.trex._box_circuit(self.circuit, options)
+        # Values must be unchanged.
+        self.assertTrue(options["enable_measures"])
+        self.assertEqual(options["measure_annotations"], "twirl")
+        # No extra keys must have been added.
+        self.assertEqual(set(options.keys()), {"enable_measures", "measure_annotations"})
+
+
+# ---------------------------------------------------------------------------
+# TREX.create_instance_from_passthrough_data
+# ---------------------------------------------------------------------------
+
+
+class TestTREXCreateInstanceFromPassthroughData(unittest.TestCase):
+    """Tests for :meth:`TREX.create_instance_from_passthrough_data`."""
+
+    @staticmethod
+    def _minimal_passthrough(**overrides):
+        data = {
+            "mitigation": "trex",
+            "version": "1.0",
+            "program_item_index": 0,
+        }
+        data.update(overrides)
+        return data
+
+    def test_happy_path_returns_trex_instance(self):
+        """A valid passthrough dict must return a ``TREX`` instance."""
+        trex = TREX.create_instance_from_passthrough_data(self._minimal_passthrough())
+        self.assertIsInstance(trex, TREX)
+
+    def test_program_item_index_is_set(self):
+        """``_program_item_index`` must match the value from the passthrough dict."""
+        trex = TREX.create_instance_from_passthrough_data(
+            self._minimal_passthrough(program_item_index=7)
+        )
+        self.assertEqual(trex._program_item_index, 7)
+
+    def test_raises_when_mitigation_key_missing(self):
+        """Missing ``'mitigation'`` key must raise ``ValueError``."""
+        passthrough = self._minimal_passthrough()
+        del passthrough["mitigation"]
+        with self.assertRaises(ValueError):
+            TREX.create_instance_from_passthrough_data(passthrough)
+
+    def test_raises_when_mitigation_is_not_trex(self):
+        """A ``'mitigation'`` value other than ``'trex'`` must raise ``ValueError``."""
+        passthrough = self._minimal_passthrough(mitigation="pec")
+        with self.assertRaises(ValueError):
+            TREX.create_instance_from_passthrough_data(passthrough)
+
+    def test_raises_when_mitigation_is_none(self):
+        """``mitigation=None`` must raise ``ValueError``."""
+        passthrough = self._minimal_passthrough(mitigation=None)
+        with self.assertRaises(ValueError):
+            TREX.create_instance_from_passthrough_data(passthrough)
 
 
 if __name__ == "__main__":

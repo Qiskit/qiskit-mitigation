@@ -50,6 +50,7 @@ class TREX:
         """Instantiate a TREX task."""
         self.tasks = []
         self.noise_model = None
+        self.boxed_circuit = None
         self._program_item_index = None
 
     def _edit_boxing_options(
@@ -60,18 +61,19 @@ class TREX:
 
         if boxing_options is None:
             return {"enable_measures": True, "measure_annotations": "all"}
+        edited_boxing_options = boxing_options.copy()
         if "enable_measures" not in boxing_options:
-            boxing_options["enable_measures"] = True
-            boxing_options["measure_annotations"] = "all"
-            return boxing_options
-        if not boxing_options["enable_measures"]:
+            edited_boxing_options["enable_measures"] = True
+            edited_boxing_options["measure_annotations"] = "all"
+            return edited_boxing_options
+        if not edited_boxing_options["enable_measures"]:
             raise ValueError('boxing_options["enable_measures"] may not be False.')
         if (
-            "measure_annotations" in boxing_options
-            and boxing_options["measure_annotations"] != "all"
+            "measure_annotations" in edited_boxing_options
+            and edited_boxing_options["measure_annotations"] != "all"
         ):
-            boxing_options["measure_annotations"] = "all"
-        return boxing_options
+            edited_boxing_options["measure_annotations"] = "all"
+        return edited_boxing_options
 
     @staticmethod
     def create_instance_from_passthrough_data(passthrough: dict[str, Any]) -> TREX:
@@ -95,8 +97,22 @@ class TREX:
         trex_task._program_item_index = program_item_index
         return trex_task
 
-    def prepare(self, num_randomizations: int, quantum_program: QuantumProgram) -> QuantumProgram:
-        """Prepare a TREX task."""
+    def prepare(
+        self,
+        num_randomizations: int,
+        quantum_program: QuantumProgram,
+        custom_boxing_options: dict | None = None,
+    ) -> QuantumProgram:
+        """Adds a TREX calibration item to the quantum program.
+
+        Args:
+            num_randomizations: Number of randomizations for the TREX calibration.
+            quantum_program: The quantum program to add an item for.
+            custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+
+        Returns:
+            The input :class:`~.QuantumProgram` instance with added TREX calibration item.
+        """
         if len(self.tasks) == 0:
             raise ValueError(
                 "A TREX must be connected to at least one mitigation task to create a calibration task."
@@ -104,7 +120,7 @@ class TREX:
         circuits = [task.circuit for task in self.tasks]
         self._program_item_index = len(quantum_program.items)
         quantum_program.items.append(
-            self._prepare_calibration_circuit(circuits, num_randomizations)
+            self._prepare_calibration_circuit(circuits, num_randomizations, custom_boxing_options)
         )
 
         data_for_passthrough = {
@@ -138,10 +154,56 @@ class TREX:
             if task_passthrough.get("trex_calibration", None) is not None:
                 task_passthrough["trex_calibration"] = True
 
+    @classmethod
+    def _box_circuit(
+        cls,
+        circuit: QuantumCircuit,
+        boxing_options: dict | None,
+    ) -> QuantumCircuit:
+        """Group the operations in the given ``circuit`` into boxes.
+
+        This function uses the :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` to group the operations in
+        the given circuit into boxes. The input custom boxing options are used as input for the boxing function.
+
+        Args:
+            circuit: The circuit to group into boxes.
+            boxing_options: Dictionary of :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` options.
+                If ``None``, default trex boxing options are used.
+
+        Returns:
+            The boxed circuit.
+
+        Raises:
+            ValueError: If ``boxing_options["enable_measures"]`` is False.
+            ValueError: If ``boxing_options["measure_annotations"]`` is not `twirl`.
+            ValueError: If the boxing pass manager fails to run.
+        """
+        if boxing_options is None:
+            boxing_options = {}
+        edited_boxing_options = boxing_options.copy()
+        if "enable_measures" not in edited_boxing_options:
+            edited_boxing_options["enable_measures"] = True
+            edited_boxing_options["measure_annotations"] = "twirl"
+        elif not edited_boxing_options["enable_measures"]:
+            raise ValueError('boxing_options["enable_measures"] may not be False.')
+        if (
+            "measure_annotations" in edited_boxing_options
+            and edited_boxing_options["measure_annotations"] != "twirl"
+        ):
+            raise ValueError('boxing_options["measure_annotations"] must be `twirl`.')
+        try:
+            boxing_pm = generate_boxing_pass_manager(**edited_boxing_options)
+        except Exception as ex:
+            raise ValueError(
+                f"Failed to generate boxing pass manager with the following error, {ex}"
+            ) from ex
+        return boxing_pm.run(circuit)
+
     @staticmethod
     def _prepare_calibration_circuit(
         circuits: Sequence[QuantumCircuit],
         num_randomizations: int,
+        custom_boxing_options: dict | None = None,
     ) -> SamplexItem:
         """Creates a TREX calibration circuit.
 
@@ -150,6 +212,7 @@ class TREX:
         Args:
             circuits: List of circuits to extract relevant qubits from.
             num_randomizations: The number of TREX calibration randomizations.
+            custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
 
         Returns:
             Samplex item containing calibration circuit for TREX factors calculation.
@@ -161,12 +224,7 @@ class TREX:
         trex_circuit = QuantumCircuit(max_num_qubits)
         trex_circuit.add_register(classical_cal_reg)
         trex_circuit.measure_all(add_bits=False)
-        boxing_pm = generate_boxing_pass_manager(
-            enable_gates=False,
-            enable_measures=True,
-            measure_annotations="twirl",
-        )
-        annotated_trex_circuit = boxing_pm.run(trex_circuit)
+        annotated_trex_circuit = TREX._box_circuit(trex_circuit, custom_boxing_options)
         template_trex_circuit, trex_samplex = build(annotated_trex_circuit)
         trex_calibration_item = SamplexItem(
             circuit=template_trex_circuit,
@@ -180,7 +238,7 @@ class TREX:
         """Compute noise model from program results.
 
         Args:
-            results: QuantumProgramResult which contains the TREX calibration circuit.
+            results: QuantumProgramResult which contains the TREX calibration circuit results.
 
         Returns:
             The learned readout noise model as a ``PauliLindbladMap``.

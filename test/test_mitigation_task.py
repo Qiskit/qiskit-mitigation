@@ -216,16 +216,31 @@ class TestBoxCircuit(unittest.TestCase):
         self.assertIn("_meas", reg_names)
 
     def test_enable_measures_injected_when_absent(self):
-        """enable_measures should be set to True automatically."""
+        """``enable_measures=True`` must be forwarded to ``generate_boxing_pass_manager``
+        even when absent from the caller's dict, and the original dict must be untouched."""
         options = {}
         qc = _simple_circuit()
-        self.task._box_circuit(qc, options)
-        self.assertTrue(options["enable_measures"])
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.task._box_circuit(qc, options)
+        _, kwargs = mock_gen.call_args
+        self.assertTrue(kwargs.get("enable_measures"))
+        # Original dict must not have been mutated.
+        self.assertNotIn("enable_measures", options)
 
     def test_measure_annotations_set_to_change_basis_when_absent(self):
+        """``measure_annotations='change_basis'`` must be forwarded to
+        ``generate_boxing_pass_manager`` even when absent, and the original dict must be untouched."""
         options = {}
-        self.task._box_circuit(_simple_circuit(), options)
-        self.assertEqual(options["measure_annotations"], "change_basis")
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.task._box_circuit(_simple_circuit(), options)
+        _, kwargs = mock_gen.call_args
+        self.assertEqual(kwargs.get("measure_annotations"), "change_basis")
+        # Original dict must not have been mutated.
+        self.assertNotIn("measure_annotations", options)
 
     def test_raises_when_enable_measures_is_false(self):
         with self.assertRaises(ValueError):
@@ -255,13 +270,18 @@ class TestBoxCircuit(unittest.TestCase):
             MitigationTask._box_circuit(_simple_circuit(), {"invalid_option_xyz": True})
 
     def test_measure_annotations_twirl_is_rewritten_to_all(self):
-        """``measure_annotations='twirl'`` must be rewritten to ``'all'``."""
-        # Must also supply enable_measures=True, otherwise the "absent" branch
-        # overwrites measure_annotations to "change_basis" before the twirl check.
+        """``measure_annotations='twirl'`` in the input must cause ``'all'`` to be forwarded
+        to ``generate_boxing_pass_manager``, and the original dict must be untouched."""
         options = {"enable_measures": True, "measure_annotations": "twirl"}
         qc = _simple_circuit()
-        MitigationTask._box_circuit(qc, options)
-        self.assertEqual(options["measure_annotations"], "all")
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            MitigationTask._box_circuit(qc, options)
+        _, kwargs = mock_gen.call_args
+        self.assertEqual(kwargs.get("measure_annotations"), "all")
+        # Original dict must not have been mutated.
+        self.assertEqual(options["measure_annotations"], "twirl")
 
     def test_invalid_boxing_options_raise_value_error(self):
         """Passing unknown options that fail boxing should raise a ``ValueError``."""
@@ -308,7 +328,11 @@ class TestComputeExpectationValue(unittest.TestCase):
         obs = self._obs("ZZ")
         result = _fake_item_result(2, 1, 4, 2, data=np.zeros((2, 1, 4, 2), dtype=bool))
         pub_result = MitigationTask.compute_expectation_value(
-            result, obs, param_shape=(1,), param_basis_pairs=[((0,), "ZZ")]
+            result,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
 
@@ -318,7 +342,11 @@ class TestComputeExpectationValue(unittest.TestCase):
         data = np.ones((2, 1, 4, 2), dtype=bool)
         result = _fake_item_result(2, 1, 4, 2, data=data)
         pub_result = MitigationTask.compute_expectation_value(
-            result, obs, param_shape=(1,), param_basis_pairs=[((0,), "ZZ")]
+            result,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
 
@@ -332,7 +360,11 @@ class TestComputeExpectationValue(unittest.TestCase):
         data[:, :, :, 1] = True  # qubit 1 = |1⟩
         result = _fake_item_result(1, 1, 4, 2, data=data)
         pub_result = MitigationTask.compute_expectation_value(
-            result, obs, param_shape=(1,), param_basis_pairs=[((0,), "ZI")]
+            result,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZI")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [-1.0], atol=1e-10)
 
@@ -344,7 +376,11 @@ class TestComputeExpectationValue(unittest.TestCase):
         flips = np.ones((2, 1, 4, 2), dtype=bool)
         result = {"_meas": data, "measurement_flips._meas": flips}
         pub_result = MitigationTask.compute_expectation_value(
-            result, obs, param_shape=(1,), param_basis_pairs=[((0,), "ZZ")]
+            result,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
 
@@ -353,7 +389,11 @@ class TestComputeExpectationValue(unittest.TestCase):
         obs = self._obs("ZZ")
         result = _fake_item_result(2, 1, 4, 2)
         pub_result = MitigationTask.compute_expectation_value(
-            result, obs, param_shape=(1,), param_basis_pairs=[((0,), "ZZ")]
+            result,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
         )
         self.assertIsInstance(pub_result, PubResult)
         self.assertTrue(hasattr(pub_result.data, "evs"))
