@@ -2,16 +2,16 @@
 
 Qiskit Mitigation is a package for handling noise in quantum computations. It contains a set of techniques that can be used to build advanced or customized error mitigation pipelines directly with [samplomatic](https://github.com/Qiskit/samplomatic). Specifically, it contains:
 
-1. Implementations of PEC, TREX, PEA, and gate folding ZNE
-2. Functionality for computing a postselected noise channel, from circuit symmetries or spacetime checks, to be used with PEC to reduce sampling overhead
-3. Postselection using non-Markovian error checks to filter corrupted samples out of measured data
-4. Support for expectation value calculation with advanced error mitigation
+1. Implementations of Probabilistic Error Cancellation (PEC), Twirling Readout Error eXtinction (TREX), and Zero-Noise Extrapolation (ZNE) with Probabilistic Error Amplification (PEA) and gate folding amplification methods.
+2. Functionality for computing a postselected noise channel, from circuit symmetries or spacetime checks, to be used with PEC to reduce sampling overhead [1].
+3. Postselection using non-Markovian error checks to filter corrupted samples out of measured data.
+4. Support for expectation value calculation with advanced error mitigation.
 
 ----------------------------------------------------------------------------------------------------
 
 ### Documentation
 
-Coming soon: All documentation is available at https://quantum.cloud.ibm.com/docs/addons/qiskit-mitigation.
+All documentation is available at https://quantum.cloud.ibm.com/docs/addons/qiskit-mitigation.
 
 ----------------------------------------------------------------------------------------------------
 
@@ -55,3 +55,9 @@ We follow [semantic versioning](https://semver.org/). We may occasionally make b
 order to improve the user experience. When possible, we will keep old interfaces and mark them as
 deprecated, as long as they can co-exist with the new ones. Each substantial improvement, breaking
 change, or deprecation will be documented in the [release notes](https://quantum.cloud.ibm.com/docs/api/qiskit-mitigation/release-notes).
+
+----------------------------------------------------------------------------------------------------
+
+### References
+
+1. Laurin E. Fischer, et al., [Spacetime mitigation of logical errors](https://arxiv.org/abs/2609.13108), arXiv:2609.13108 [quant-ph].
