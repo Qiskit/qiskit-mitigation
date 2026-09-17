@@ -66,7 +66,7 @@ Adjust the options below to suit your needs.
 
     pip install tox notebook -e '.[notebook-dependencies,dev]'
 
-If you installed the notebook dependencies, you can get started by running the notebooks in the docs.
+If you installed the notebook dependencies, you can get started by running the notebooks in the ``docs/`` directory.
 
 .. code::
 
