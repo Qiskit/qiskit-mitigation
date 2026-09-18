@@ -388,7 +388,11 @@ class PEA(MitigationTask):
 
         item_result, measure_noise_data = self._extract_item_data(results, measure_noise_data)
 
-        return self.compute_expectation_value_pea(
+        if self.VERSION not in VERSION_TO_POSTPROCESSOR:
+            raise ValueError("Unsupported PEA task version.")
+        postprocessor = VERSION_TO_POSTPROCESSOR[self.VERSION]
+
+        return postprocessor(
             item_result,
             observables=self.observables,
             param_shape=self.param_shape,
@@ -417,6 +421,10 @@ class PEA(MitigationTask):
         Returns:
             A PEA instance.
         """
+        if (mitigation_type := passthrough.get("mitigation")) is None or mitigation_type != "pea":
+            raise ValueError("'mitigation' field of the passthrough_data must be 'pea'")
+        if (version := passthrough.get("version")) is None:
+            raise ValueError("Missing 'version' in passthrough data.")
         if (observables := passthrough.get("observables")) is None:
             raise ValueError("Missing 'observables' in passthrough data.")
         param_basis_pairs = passthrough.get("param_basis_pairs")
@@ -436,6 +444,7 @@ class PEA(MitigationTask):
         extrapolated_noise_factors = passthrough.get("extrapolated_noise_factors")
 
         pea = PEA()
+        pea.VERSION = version
         pea.observables = ObservablesArray.coerce(observables)
         pea.param_basis_pairs = param_basis_pairs
         pea.param_shape = param_shape
@@ -633,3 +642,6 @@ class PEA(MitigationTask):
             shape=zero_extrapolated_exp_vals.shape,
         )
         return PubResult(data=data_bin, metadata={"selected_extrapolators": selected_extrapolators})
+
+
+VERSION_TO_POSTPROCESSOR = {"0.1": PEA.compute_expectation_value_pea}

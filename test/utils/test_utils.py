@@ -49,6 +49,7 @@ def _task_passthrough(mitigation=None, trex_calibration=False, **extra):
     """Return a minimal valid passthrough dict for a single MitigationTask (mitigation=None by default)."""
     data = {
         "mitigation": mitigation,
+        "version": "0.1",
         "trex_calibration": trex_calibration,
         "observables": SparsePauliOp("ZZ"),
         "param_basis_pairs": None,
@@ -116,6 +117,14 @@ class TestLoadTasksFromResultMitigationKey(unittest.TestCase):
     def test_raises_when_mitigation_is_not_a_sequence(self):
         """A non-sequence value for 'qiskit_mitigation' must raise ValueError."""
         result = _make_result(passthrough_data={"qiskit_mitigation": 42})
+        with self.assertRaises(ValueError):
+            load_tasks_from_result(result)
+
+    def test_raises_when_version_missing_in_task(self):
+        """Missing 'version' in a task passthrough entry must raise ValueError."""
+        task_data = _task_passthrough()
+        del task_data["version"]
+        result = _make_result(passthrough_data={"qiskit_mitigation": [task_data]})
         with self.assertRaises(ValueError):
             load_tasks_from_result(result)
 
@@ -231,6 +240,7 @@ class TestLoadTasksFromResultMitigationTypes(unittest.TestCase):
     def _pec_passthrough(self, **extra):
         data = {
             "mitigation": "pec",
+            "version": "0.1",
             "trex_calibration": False,
             "observables": SparsePauliOp("ZZ"),
             "param_basis_pairs": None,
@@ -246,6 +256,7 @@ class TestLoadTasksFromResultMitigationTypes(unittest.TestCase):
     def _gate_folding_passthrough(self, **extra):
         data = {
             "mitigation": "gate_folding",
+            "version": "0.1",
             "trex_calibration": False,
             "observables": SparsePauliOp("ZZ"),
             "param_basis_pairs": None,
@@ -263,6 +274,7 @@ class TestLoadTasksFromResultMitigationTypes(unittest.TestCase):
     def _pea_passthrough(self, **extra):
         data = {
             "mitigation": "pea",
+            "version": "0.1",
             "trex_calibration": False,
             "observables": SparsePauliOp("ZZ"),
             "param_basis_pairs": None,
@@ -302,6 +314,7 @@ class TestLoadTasksFromResultMitigationTypes(unittest.TestCase):
         """An unknown 'mitigation' type must raise ValueError."""
         bad_data = {
             "mitigation": "unknown_type_xyz",
+            "version": "0.1",
             "trex_calibration": False,
             "observables": SparsePauliOp("ZZ"),
             "param_basis_pairs": None,
@@ -639,7 +652,7 @@ class TestTREXCreateInstanceFromPassthroughData(unittest.TestCase):
 
     def test_happy_path_returns_trex_instance(self):
         """A passthrough dict with ``mitigation='trex'`` must return a TREX instance."""
-        passthrough = {"mitigation": "trex", "program_item_index": 3}
+        passthrough = {"mitigation": "trex", "version": "0.1", "program_item_index": 3}
         trex_task = TREX.create_instance_from_passthrough_data(passthrough)
         self.assertIsInstance(trex_task, TREX)
         self.assertEqual(trex_task._program_item_index, 3)

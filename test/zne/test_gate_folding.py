@@ -804,20 +804,24 @@ class TestGateFoldingPostprocess(unittest.TestCase):
     def test_uses_saved_noise_factors_when_not_passed(self):
         """Saved ``noise_factors`` must be forwarded when none are given to postprocess."""
         gf = self._make_minimal_gate_folding()
-        with patch.object(
-            GateFolding, "compute_expectation_value_gate_folding", return_value=None
-        ) as mock_fn:
+        with patch.dict(
+            "qiskit_mitigation.zne.gate_folding.VERSION_TO_POSTPROCESSOR",
+            {"0.1": MagicMock(return_value=None)},
+        ) as mock_dict:
             gf.postprocess(MagicMock())
+            mock_fn = mock_dict["0.1"]
             _, call_kwargs = mock_fn.call_args
             np.testing.assert_array_equal(call_kwargs["noise_factors"], list(gf.noise_factors))
 
     def test_uses_saved_extrapolator_when_not_passed(self):
         """Saved ``extrapolator`` must be forwarded when none is given to postprocess."""
         gf = self._make_minimal_gate_folding()
-        with patch.object(
-            GateFolding, "compute_expectation_value_gate_folding", return_value=None
-        ) as mock_fn:
+        with patch.dict(
+            "qiskit_mitigation.zne.gate_folding.VERSION_TO_POSTPROCESSOR",
+            {"0.1": MagicMock(return_value=None)},
+        ) as mock_dict:
             gf.postprocess(MagicMock())
+            mock_fn = mock_dict["0.1"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolator"], list(gf.extrapolator))
 
@@ -825,10 +829,12 @@ class TestGateFoldingPostprocess(unittest.TestCase):
         """Noise factors passed to ``postprocess`` must override saved ones."""
         gf = self._make_minimal_gate_folding()
         override = [1.0, 7.0, 9.0]
-        with patch.object(
-            GateFolding, "compute_expectation_value_gate_folding", return_value=None
-        ) as mock_fn:
+        with patch.dict(
+            "qiskit_mitigation.zne.gate_folding.VERSION_TO_POSTPROCESSOR",
+            {"0.1": MagicMock(return_value=None)},
+        ) as mock_dict:
             gf.postprocess(MagicMock(), noise_factors=override)
+            mock_fn = mock_dict["0.1"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["noise_factors"], override)
 
@@ -836,10 +842,12 @@ class TestGateFoldingPostprocess(unittest.TestCase):
         """Extrapolator passed to ``postprocess`` must override saved one."""
         gf = self._make_minimal_gate_folding()
         override = ["fallback"]
-        with patch.object(
-            GateFolding, "compute_expectation_value_gate_folding", return_value=None
-        ) as mock_fn:
+        with patch.dict(
+            "qiskit_mitigation.zne.gate_folding.VERSION_TO_POSTPROCESSOR",
+            {"0.1": MagicMock(return_value=None)},
+        ) as mock_dict:
             gf.postprocess(MagicMock(), extrapolator=override)
+            mock_fn = mock_dict["0.1"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolator"], override)
 
@@ -847,10 +855,12 @@ class TestGateFoldingPostprocess(unittest.TestCase):
         """``extrapolated_noise_factors`` passed to postprocess must be forwarded."""
         gf = self._make_minimal_gate_folding()
         override = [0.0, 1.0]
-        with patch.object(
-            GateFolding, "compute_expectation_value_gate_folding", return_value=None
-        ) as mock_fn:
+        with patch.dict(
+            "qiskit_mitigation.zne.gate_folding.VERSION_TO_POSTPROCESSOR",
+            {"0.1": MagicMock(return_value=None)},
+        ) as mock_dict:
             gf.postprocess(MagicMock(), extrapolated_noise_factors=override)
+            mock_fn = mock_dict["0.1"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolated_noise_factors"], override)
 
@@ -871,6 +881,23 @@ class TestGateFoldingPostprocess(unittest.TestCase):
         fake_meas = np.zeros((1, 1, 1, 1), dtype=np.uint8)
         result = gf.postprocess([{"_meas": fake_meas}, {"_meas": fake_meas}])
         self.assertIsInstance(result, PubResult)
+
+    def test_postprocess_unsupported_version_raises(self):
+        """``postprocess`` must raise ValueError when task VERSION is unsupported."""
+        qc = QuantumCircuit(1)
+        qc.x(0)
+        gf = GateFolding()
+        gf.prepare(
+            circuit=qc,
+            observables=[SparsePauliOp("Z")],
+            parameters=None,
+            noise_factors=[1, 3],
+            extrapolator=["linear"],
+        )
+        gf.VERSION = "unsupported_version"
+        fake_meas = np.zeros((1, 1, 1, 1), dtype=np.uint8)
+        with self.assertRaises(ValueError):
+            gf.postprocess([{"_meas": fake_meas}, {"_meas": fake_meas}])
 
 
 # ---------------------------------------------------------------------------
@@ -972,6 +999,8 @@ class TestGateFoldingCreateInstanceFromPassthroughData(unittest.TestCase):
     @staticmethod
     def _minimal_passthrough(**overrides):
         data = {
+            "mitigation": "gate_folding",
+            "version": "0.1",
             "observables": SparsePauliOp("ZZ"),
             "param_basis_pairs": None,
             "param_shape": None,
@@ -1001,6 +1030,24 @@ class TestGateFoldingCreateInstanceFromPassthroughData(unittest.TestCase):
         np.testing.assert_array_equal(gf.noise_factors, [1.0, 3.0, 5.0])
         self.assertEqual(gf.extrapolator, ["linear"])
         self.assertIsNone(gf.extrapolated_noise_factors)
+
+    def test_raises_when_mitigation_missing_or_wrong(self):
+        """Missing or non-'gate_folding' mitigation field must raise ValueError."""
+        passthrough = self._minimal_passthrough()
+        del passthrough["mitigation"]
+        with self.assertRaises(ValueError):
+            GateFolding.create_instance_from_passthrough_data(passthrough)
+
+        passthrough["mitigation"] = "wrong"
+        with self.assertRaises(ValueError):
+            GateFolding.create_instance_from_passthrough_data(passthrough)
+
+    def test_raises_when_version_missing(self):
+        """Missing 'version' must raise ValueError."""
+        passthrough = self._minimal_passthrough()
+        del passthrough["version"]
+        with self.assertRaises(ValueError):
+            GateFolding.create_instance_from_passthrough_data(passthrough)
 
     def test_raises_when_observables_missing(self):
         """Missing 'observables' must raise ValueError."""

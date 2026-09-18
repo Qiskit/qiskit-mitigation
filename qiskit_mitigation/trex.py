@@ -91,9 +91,12 @@ class TREX:
         mitigation_type = passthrough.get("mitigation")
         if mitigation_type is None or mitigation_type != "trex":
             raise ValueError("'mitigation' field of the passthrough_data must be 'trex'")
+        if (version := passthrough.get("version")) is None:
+            raise ValueError("Missing 'version' in passthrough data.")
 
         program_item_index = passthrough.get("program_item_index")
         trex_task = TREX()
+        trex_task.VERSION = version
         trex_task._program_item_index = program_item_index
         return trex_task
 
@@ -243,6 +246,18 @@ class TREX:
         Returns:
             The learned readout noise model as a ``PauliLindbladMap``.
         """
+        calc_noise_model_func = VERSION_TO_CALC_NOISE_FUNC[self.VERSION]
+        return calc_noise_model_func(self, results)
+
+    def _compute_noise_model_0_1(self, results: QuantumProgramResult) -> PauliLindbladMap:
+        """Compute noise model from program results for TREX version 0.1.
+
+        Args:
+            results: QuantumProgramResult which contains the TREX calibration circuit results.
+
+        Returns:
+            The learned readout noise model as a ``PauliLindbladMap``.
+        """
         calibration_result = results[self._program_item_index]
         if "_trex_cal" not in calibration_result:
             raise ValueError("Dedicated TREX calibration circuit is missing from the results.")
@@ -328,3 +343,6 @@ class TREX:
                 }
             )
         return scales_each_observable
+
+
+VERSION_TO_CALC_NOISE_FUNC = {"0.1": TREX._compute_noise_model_0_1}

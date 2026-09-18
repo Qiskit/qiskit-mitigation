@@ -368,7 +368,11 @@ class PEC(MitigationTask):
         """
         item_result, measure_noise_data = self._extract_item_data(results, measure_noise_data)
 
-        return self.compute_expectation_value_pec(
+        if self.VERSION not in VERSION_TO_POSTPROCESSOR:
+            raise ValueError("Unsupported PEC task version.")
+        postprocessor = VERSION_TO_POSTPROCESSOR[self.VERSION]
+
+        return postprocessor(
             item_result,
             observables=self.observables,
             param_shape=self.param_shape,
@@ -550,6 +554,10 @@ class PEC(MitigationTask):
         Returns:
             A PEC instance.
         """
+        if (mitigation_type := passthrough.get("mitigation")) is None or mitigation_type != "pec":
+            raise ValueError("'mitigation' field of the passthrough_data must be 'pec'")
+        if (version := passthrough.get("version")) is None:
+            raise ValueError("Missing 'version' in passthrough data.")
         if (observables := passthrough.get("observables")) is None:
             raise ValueError("Missing 'observables' in passthrough data.")
         param_basis_pairs = passthrough.get("param_basis_pairs")
@@ -567,6 +575,7 @@ class PEC(MitigationTask):
             raise ValueError("Missing 'pec_gamma' in passthrough data.")
 
         pec = PEC()
+        pec.VERSION = version
         pec.observables = ObservablesArray.coerce(observables)
         pec.param_basis_pairs = param_basis_pairs
         pec.param_shape = param_shape
@@ -698,3 +707,6 @@ class PEC(MitigationTask):
         exp_vals, ensemble_stds = (np.array(x) for x in zip(*exp_val_and_std, strict=True))
         data_bin = DataBin(evs=exp_vals, stds=ensemble_stds, shape=exp_vals.shape)
         return PubResult(data=data_bin)
+
+
+VERSION_TO_POSTPROCESSOR = {"0.1": PEC.compute_expectation_value_pec}

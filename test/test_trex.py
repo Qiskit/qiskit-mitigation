@@ -727,7 +727,7 @@ class TestTREXCreateInstanceFromPassthroughData(unittest.TestCase):
     def _minimal_passthrough(**overrides):
         data = {
             "mitigation": "trex",
-            "version": "1.0",
+            "version": "0.1",
             "program_item_index": 0,
         }
         data.update(overrides)
@@ -744,6 +744,13 @@ class TestTREXCreateInstanceFromPassthroughData(unittest.TestCase):
             self._minimal_passthrough(program_item_index=7)
         )
         self.assertEqual(trex._program_item_index, 7)
+
+    def test_raises_when_version_key_missing(self):
+        """Missing ``'version'`` key must raise ``ValueError``."""
+        passthrough = self._minimal_passthrough()
+        del passthrough["version"]
+        with self.assertRaises(ValueError):
+            TREX.create_instance_from_passthrough_data(passthrough)
 
     def test_raises_when_mitigation_key_missing(self):
         """Missing ``'mitigation'`` key must raise ``ValueError``."""

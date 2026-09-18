@@ -491,7 +491,11 @@ class GateFolding(MitigationTask):
             results, measure_noise_data
         )
 
-        return self.compute_expectation_value_gate_folding(
+        if self.VERSION not in VERSION_TO_POSTPROCESSOR:
+            raise ValueError("Unsupported GateFolding task version.")
+        postprocessor = VERSION_TO_POSTPROCESSOR[self.VERSION]
+
+        return postprocessor(
             item_results,
             observables=self.observables,
             param_shape=self.param_shape,
@@ -764,6 +768,12 @@ class GateFolding(MitigationTask):
         Returns:
             A GateFolding instance.
         """
+        if (
+            mitigation_type := passthrough.get("mitigation")
+        ) is None or mitigation_type != "gate_folding":
+            raise ValueError("'mitigation' field of the passthrough_data must be 'gate_folding'")
+        if (version := passthrough.get("version")) is None:
+            raise ValueError("Missing 'version' in passthrough data.")
         if (observables := passthrough.get("observables")) is None:
             raise ValueError("Missing 'observables' in passthrough data.")
         param_basis_pairs = passthrough.get("param_basis_pairs")
@@ -783,6 +793,7 @@ class GateFolding(MitigationTask):
         extrapolated_noise_factors = passthrough.get("extrapolated_noise_factors")
 
         gf = GateFolding()
+        gf.VERSION = version
         gf.observables = ObservablesArray.coerce(observables)
         gf.param_basis_pairs = param_basis_pairs
         gf.param_shape = param_shape
@@ -998,3 +1009,6 @@ class GateFolding(MitigationTask):
             shape=zero_extrapolated_exp_vals.shape,
         )
         return PubResult(data=data_bin, metadata={"selected_extrapolators": selected_extrapolators})
+
+
+VERSION_TO_POSTPROCESSOR = {"0.1": GateFolding.compute_expectation_value_gate_folding}
