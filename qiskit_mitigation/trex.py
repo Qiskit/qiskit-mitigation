@@ -223,7 +223,7 @@ class TREX:
         # create the combined noise learning layer of all given inputs
         max_num_qubits = max(circuit.num_qubits for circuit in circuits)
 
-        classical_cal_reg = ClassicalRegister(max_num_qubits, name="_trex_cal")
+        classical_cal_reg = ClassicalRegister(max_num_qubits, name="_meas")
         trex_circuit = QuantumCircuit(max_num_qubits)
         trex_circuit.add_register(classical_cal_reg)
         trex_circuit.measure_all(add_bits=False)
@@ -259,11 +259,11 @@ class TREX:
             The learned readout noise model as a ``PauliLindbladMap``.
         """
         calibration_result = results[self._program_item_index]
-        if "_trex_cal" not in calibration_result:
+        if "_meas" not in calibration_result:
             raise ValueError("Dedicated TREX calibration circuit is missing from the results.")
 
-        trex_noise_calibration_data = calibration_result["_trex_cal"]
-        trex_calibration_measurement_flips = calibration_result["measurement_flips._trex_cal"]
+        trex_noise_calibration_data = calibration_result["_meas"]
+        trex_calibration_measurement_flips = calibration_result["measurement_flips._meas"]
         noise_calibration_data_flipped = np.logical_xor(
             trex_noise_calibration_data, trex_calibration_measurement_flips
         )
