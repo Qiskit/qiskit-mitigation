@@ -53,8 +53,8 @@ def _fake_trex_item_result(
     if flips is None:
         flips = np.zeros((num_randomizations, shots, num_qubits), dtype=bool)
     return {
-        "_trex_cal": cal_data,
-        "measurement_flips._trex_cal": flips,
+        "_meas": cal_data,
+        "measurement_flips._meas": flips,
     }
 
 
@@ -209,7 +209,7 @@ class TestPrepareCalibrationCircuit(unittest.TestCase):
         circuits = [_simple_circuit(2)]
         item = TREX._prepare_calibration_circuit(circuits, num_randomizations=5)
         reg_names = [r.name for r in item.circuit.cregs]
-        self.assertIn("_trex_cal", reg_names)
+        self.assertIn("_meas", reg_names)
 
     def test_num_qubits_is_max_of_input_circuits(self):
         """Calibration circuit must span the largest qubit count across all input circuits."""
