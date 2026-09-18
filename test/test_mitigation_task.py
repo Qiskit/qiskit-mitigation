@@ -1096,6 +1096,14 @@ class TestMitigationTaskPostprocess(unittest.TestCase):
         pub_result = task.postprocess(item_result)
         self.assertIsInstance(pub_result, PubResult)
 
+    def test_postprocess_unsupported_version_raises(self):
+        """``postprocess`` must raise ValueError when task VERSION is unsupported."""
+        task = self._prepared_task()
+        task.VERSION = "unsupported_version"
+        item_result = {"_meas": np.zeros((2, 1, 4, 2), dtype=bool)}
+        with self.assertRaises(ValueError):
+            task.postprocess(item_result)
+
 
 # ---------------------------------------------------------------------------
 # MitigationTask.create_instance_from_passthrough_data
@@ -1108,6 +1116,7 @@ class TestCreateInstanceFromPassthroughData(unittest.TestCase):
     @staticmethod
     def _minimal_passthrough(**overrides):
         data = {
+            "version": "0.1",
             "observables": SparsePauliOp("ZZ"),
             "param_basis_pairs": None,
             "param_shape": None,
@@ -1129,6 +1138,13 @@ class TestCreateInstanceFromPassthroughData(unittest.TestCase):
         passthrough = self._minimal_passthrough(program_item_index=7)
         task = MitigationTask.create_instance_from_passthrough_data(passthrough)
         self.assertEqual(task._program_item_index, 7)
+
+    def test_raises_when_version_missing(self):
+        """Missing 'version' must raise ValueError."""
+        passthrough = self._minimal_passthrough()
+        del passthrough["version"]
+        with self.assertRaises(ValueError):
+            MitigationTask.create_instance_from_passthrough_data(passthrough)
 
     def test_raises_when_observables_missing(self):
         """Missing 'observables' must raise ValueError."""

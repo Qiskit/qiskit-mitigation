@@ -937,6 +937,23 @@ class TestPECPostprocess(unittest.TestCase):
         result = pec.postprocess(item_result)
         self.assertIsInstance(result, PubResult)
 
+    def test_postprocess_unsupported_version_raises(self):
+        """``postprocess`` must raise ValueError when task VERSION is unsupported."""
+        pec = PEC()
+        qc = _simple_circuit()
+        obs = [SparsePauliOp("ZZ")]
+        noise_map = self._noise_maps_for_circuit(qc)
+        pec.prepare(qc, obs, parameters=None, noise_maps=noise_map)
+        pec.VERSION = "unsupported_version"
+
+        pec_signs = np.zeros((2, 1, 1), dtype=bool)
+        item_result = {
+            "_meas": np.zeros((2, 1, 4, 2), dtype=bool),
+            "pauli_signs": pec_signs,
+        }
+        with self.assertRaises(ValueError):
+            pec.postprocess(item_result)
+
 
 # ---------------------------------------------------------------------------
 # PEC.create_instance_from_passthrough_data
@@ -949,6 +966,8 @@ class TestPECCreateInstanceFromPassthroughData(unittest.TestCase):
     @staticmethod
     def _minimal_passthrough(**overrides):
         data = {
+            "mitigation": "pec",
+            "version": "0.1",
             "observables": SparsePauliOp("ZZ"),
             "param_basis_pairs": None,
             "param_shape": None,
@@ -977,6 +996,24 @@ class TestPECCreateInstanceFromPassthroughData(unittest.TestCase):
             self._minimal_passthrough(program_item_index=4)
         )
         self.assertEqual(pec._program_item_index, 4)
+
+    def test_raises_when_mitigation_missing_or_wrong(self):
+        """Missing or non-'pec' mitigation field must raise ValueError."""
+        passthrough = self._minimal_passthrough()
+        del passthrough["mitigation"]
+        with self.assertRaises(ValueError):
+            PEC.create_instance_from_passthrough_data(passthrough)
+
+        passthrough["mitigation"] = "wrong"
+        with self.assertRaises(ValueError):
+            PEC.create_instance_from_passthrough_data(passthrough)
+
+    def test_raises_when_version_missing(self):
+        """Missing 'version' must raise ValueError."""
+        passthrough = self._minimal_passthrough()
+        del passthrough["version"]
+        with self.assertRaises(ValueError):
+            PEC.create_instance_from_passthrough_data(passthrough)
 
     def test_raises_when_observables_missing(self):
         """Missing 'observables' must raise ValueError."""

@@ -65,6 +65,9 @@ def load_tasks_from_result(
     for task_passthrough in mitigation_passthrough:
         mitigation_type = task_passthrough.get("mitigation", None)
         trex_calibration = task_passthrough.get("trex_calibration", None)
+        version = task_passthrough.get("version", None)
+        if version is None:
+            raise ValueError("missing version in one of the passthrough data items.")
         if trex_calibration and trex is None:
             raise ValueError(
                 "The program contains a task that is using TREX mitigation in which the calibration "

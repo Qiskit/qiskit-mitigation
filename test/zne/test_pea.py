@@ -450,9 +450,13 @@ class TestPEAPostprocess(unittest.TestCase):
         pea.broadcast_obs_and_params = True
 
         sentinel = object()
-        with patch.object(PEA, "compute_expectation_value_pea", return_value=sentinel) as mock_fn:
+        with patch.dict(
+            "qiskit_mitigation.zne.pea.VERSION_TO_POSTPROCESSOR",
+            {"0.1": MagicMock(return_value=sentinel)},
+        ) as mock_dict:
             result = pea.postprocess(MagicMock())
             self.assertIs(result, sentinel)
+            mock_fn = mock_dict["0.1"]
             _, call_kwargs = mock_fn.call_args
             np.testing.assert_array_equal(call_kwargs["noise_factors"], list(pea.noise_factors))
 
@@ -468,8 +472,12 @@ class TestPEAPostprocess(unittest.TestCase):
         pea.broadcast_obs_and_params = True
 
         override = [1.0, 7.0]
-        with patch.object(PEA, "compute_expectation_value_pea", return_value=None) as mock_fn:
+        with patch.dict(
+            "qiskit_mitigation.zne.pea.VERSION_TO_POSTPROCESSOR",
+            {"0.1": MagicMock(return_value=None)},
+        ) as mock_dict:
             pea.postprocess(MagicMock(), noise_factors=override)
+            mock_fn = mock_dict["0.1"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["noise_factors"], override)
 
@@ -485,8 +493,12 @@ class TestPEAPostprocess(unittest.TestCase):
         pea.broadcast_obs_and_params = True
 
         override = ["fallback"]
-        with patch.object(PEA, "compute_expectation_value_pea", return_value=None) as mock_fn:
+        with patch.dict(
+            "qiskit_mitigation.zne.pea.VERSION_TO_POSTPROCESSOR",
+            {"0.1": MagicMock(return_value=None)},
+        ) as mock_dict:
             pea.postprocess(MagicMock(), extrapolator=override)
+            mock_fn = mock_dict["0.1"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolator"], override)
 
@@ -503,8 +515,12 @@ class TestPEAPostprocess(unittest.TestCase):
         pea.extrapolated_noise_factors = None
 
         override = [0.0, 1.0]
-        with patch.object(PEA, "compute_expectation_value_pea", return_value=None) as mock_fn:
+        with patch.dict(
+            "qiskit_mitigation.zne.pea.VERSION_TO_POSTPROCESSOR",
+            {"0.1": MagicMock(return_value=None)},
+        ) as mock_dict:
             pea.postprocess(MagicMock(), extrapolated_noise_factors=override)
+            mock_fn = mock_dict["0.1"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolated_noise_factors"], override)
 
@@ -521,10 +537,29 @@ class TestPEAPostprocess(unittest.TestCase):
         saved = [0.0, 2.0]
         pea.extrapolated_noise_factors = saved
 
-        with patch.object(PEA, "compute_expectation_value_pea", return_value=None) as mock_fn:
+        with patch.dict(
+            "qiskit_mitigation.zne.pea.VERSION_TO_POSTPROCESSOR",
+            {"0.1": MagicMock(return_value=None)},
+        ) as mock_dict:
             pea.postprocess(MagicMock())
+            mock_fn = mock_dict["0.1"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(list(call_kwargs["extrapolated_noise_factors"]), saved)
+
+    def test_postprocess_unsupported_version_raises(self):
+        """``postprocess`` must raise ValueError when task VERSION is unsupported."""
+        pea = PEA()
+        pea.noise_factors = np.array(NOISE_FACTORS)
+        pea.extrapolator = ["linear"]
+        pea.observables = _obs("Z")
+        pea.parameters = None
+        pea.param_basis_pairs = [((0,), "Z")]
+        pea.meas_bases = None
+        pea.broadcast_obs_and_params = True
+        pea.VERSION = "unsupported_version"
+
+        with self.assertRaises(ValueError):
+            pea.postprocess(MagicMock())
 
 
 # ---------------------------------------------------------------------------
@@ -842,6 +877,8 @@ class TestPEACreateInstanceFromPassthroughData(unittest.TestCase):
     @staticmethod
     def _minimal_passthrough(**overrides):
         data = {
+            "mitigation": "pea",
+            "version": "0.1",
             "observables": SparsePauliOp("ZZ"),
             "param_basis_pairs": None,
             "param_shape": None,
@@ -870,6 +907,24 @@ class TestPEACreateInstanceFromPassthroughData(unittest.TestCase):
         np.testing.assert_array_equal(pea.noise_factors, [1.0, 3.0, 5.0])
         self.assertEqual(pea.extrapolator, ["linear"])
         self.assertIsNone(pea.extrapolated_noise_factors)
+
+    def test_raises_when_mitigation_missing_or_wrong(self):
+        """Missing or non-'pea' mitigation field must raise ValueError."""
+        passthrough = self._minimal_passthrough()
+        del passthrough["mitigation"]
+        with self.assertRaises(ValueError):
+            PEA.create_instance_from_passthrough_data(passthrough)
+
+        passthrough["mitigation"] = "wrong"
+        with self.assertRaises(ValueError):
+            PEA.create_instance_from_passthrough_data(passthrough)
+
+    def test_raises_when_version_missing(self):
+        """Missing 'version' must raise ValueError."""
+        passthrough = self._minimal_passthrough()
+        del passthrough["version"]
+        with self.assertRaises(ValueError):
+            PEA.create_instance_from_passthrough_data(passthrough)
 
     def test_raises_when_observables_missing(self):
         """Missing 'observables' must raise ValueError."""
