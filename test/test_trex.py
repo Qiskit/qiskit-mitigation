@@ -53,8 +53,8 @@ def _fake_trex_item_result(
     if flips is None:
         flips = np.zeros((num_randomizations, shots, num_qubits), dtype=bool)
     return {
-        "_trex_cal": cal_data,
-        "measurement_flips._trex_cal": flips,
+        "_meas": cal_data,
+        "measurement_flips._meas": flips,
     }
 
 
@@ -204,12 +204,12 @@ class TestPrepareCalibrationCircuit(unittest.TestCase):
         item = TREX._prepare_calibration_circuit(circuits, num_randomizations=5)
         self.assertIsInstance(item.circuit, QuantumCircuit)
 
-    def test_calibration_circuit_has_trex_cal_register(self):
-        """The calibration circuit must include a classical register named ``'_trex_cal'``."""
+    def test_calibration_circuit_has_meas_register(self):
+        """The calibration circuit must include a classical register named ``'_meas'``."""
         circuits = [_simple_circuit(2)]
         item = TREX._prepare_calibration_circuit(circuits, num_randomizations=5)
         reg_names = [r.name for r in item.circuit.cregs]
-        self.assertIn("_trex_cal", reg_names)
+        self.assertIn("_meas", reg_names)
 
     def test_num_qubits_is_max_of_input_circuits(self):
         """Calibration circuit must span the largest qubit count across all input circuits."""
@@ -307,8 +307,8 @@ class TestComputeNoiseModel(unittest.TestCase):
         self.trex = TREX()
         self.trex._program_item_index = 0
 
-    def test_raises_when_trex_cal_key_missing(self):
-        """Must raise ``ValueError`` when ``'_trex_cal'`` key is absent from results."""
+    def test_raises_when_meas_key_missing(self):
+        """Must raise ``ValueError`` when ``'_meas'`` key is absent from results."""
         mock_results = MagicMock()
         mock_results.__getitem__ = MagicMock(return_value={"wrong_key": np.zeros((1, 4, 2))})
         with self.assertRaises(ValueError):
@@ -346,6 +346,25 @@ class TestComputeNoiseModel(unittest.TestCase):
             return_value=_fake_trex_item_result(4, 8, num_qubits, cal_data, flips)
         )
         noise_model = self.trex.compute_noise_model(mock_results)
+        self.assertIsInstance(noise_model, PauliLindbladMap)
+        self.assertEqual(noise_model.num_qubits, num_qubits)
+
+    def test_deprecated_trex_cal_register_emits_warning_and_returns_noise_model(self):
+        """When ``'_trex_cal'`` is present, a ``DeprecationWarning`` must be emitted and
+        the noise model must still be computed correctly from ``'_trex_cal'`` data."""
+        num_qubits = 2
+        cal_data = np.zeros((2, 4, num_qubits), dtype=bool)
+        flips = np.zeros((2, 4, num_qubits), dtype=bool)
+        item_result = {
+            "_trex_cal": cal_data,
+            "measurement_flips._trex_cal": flips,
+        }
+        mock_results = MagicMock()
+        mock_results.__getitem__ = MagicMock(return_value=item_result)
+
+        with self.assertWarns(DeprecationWarning):
+            noise_model = self.trex.compute_noise_model(mock_results)
+
         self.assertIsInstance(noise_model, PauliLindbladMap)
         self.assertEqual(noise_model.num_qubits, num_qubits)
 
