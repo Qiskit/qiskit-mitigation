@@ -109,6 +109,9 @@ class TREX:
     ) -> QuantumProgram:
         """Adds a TREX calibration item to the quantum program.
 
+        The created calibration circuit contains a measurement on all qubits measured in the circuits mitigated by
+        this instance. The classical register of the measurement is named ``_meas``.
+
         Args:
             num_randomizations: Number of randomizations for the TREX calibration.
             quantum_program: The quantum program to add an item for.
