@@ -271,7 +271,7 @@ class TREX:
                 "Register name of '_trex_cal' for TREX calibration result is deprecated. "
                 "Use newer version of qiskit-mitigation to create calibration with `_meas` as register name.",
                 DeprecationWarning,
-                stacklevel=2,
+                stacklevel=3,
             )
             trex_noise_calibration_data = calibration_result["_trex_cal"]
             trex_calibration_measurement_flips = calibration_result["measurement_flips._trex_cal"]
