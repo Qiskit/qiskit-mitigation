@@ -1,0 +1,3 @@
+---
+prelude: >
+    This is the first release of Qiskit Mitigation, a package for handling noise in quantum computations. It contains a set of techniques that can be used to build advanced or customized error mitigation pipelines directly with samplomatic.
