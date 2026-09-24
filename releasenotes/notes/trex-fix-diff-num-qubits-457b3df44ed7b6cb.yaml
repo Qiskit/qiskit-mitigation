@@ -1,0 +1,4 @@
+---
+fixes:
+  - |
+    Fixed issue where applying TREX on multiple tasks with different number of qubits raised an error.

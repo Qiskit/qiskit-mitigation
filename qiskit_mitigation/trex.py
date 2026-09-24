@@ -299,9 +299,10 @@ class TREX:
         else:
             sparse_pauli = QubitSparsePauli(observable_term)
         if isinstance(noise_data, PauliLindbladMap):
+            num_qubits = max(noise_data.num_qubits, sparse_pauli.num_qubits)
             z_sparse_pauli = QubitSparsePauli(
                 ("Z" * len(sparse_pauli.indices), sparse_pauli.indices),
-                num_qubits=sparse_pauli.num_qubits,
+                num_qubits=num_qubits,
             )
             trex_factor: float = 1 / noise_data.pauli_fidelity(z_sparse_pauli)
             return trex_factor
