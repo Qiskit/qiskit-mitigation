@@ -53,6 +53,7 @@ lint = [
     "qiskit-mitigation[style]",
     "mypy==1.19.0",
     "pylint==4.0.4",
+    "reno>=4.1",
 ]
 notebook-dependencies = [
     "qiskit-mitigation",
