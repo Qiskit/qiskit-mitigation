@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -107,6 +108,9 @@ class TREX:
         custom_boxing_options: dict | None = None,
     ) -> QuantumProgram:
         """Adds a TREX calibration item to the quantum program.
+
+        The created calibration circuit contains a measurement on all qubits measured in the circuits mitigated by
+        this instance. The classical register of the measurement is named ``_meas``.
 
         Args:
             num_randomizations: Number of randomizations for the TREX calibration.
@@ -223,7 +227,7 @@ class TREX:
         # create the combined noise learning layer of all given inputs
         max_num_qubits = max(circuit.num_qubits for circuit in circuits)
 
-        classical_cal_reg = ClassicalRegister(max_num_qubits, name="_trex_cal")
+        classical_cal_reg = ClassicalRegister(max_num_qubits, name="_meas")
         trex_circuit = QuantumCircuit(max_num_qubits)
         trex_circuit.add_register(classical_cal_reg)
         trex_circuit.measure_all(add_bits=False)
@@ -259,11 +263,21 @@ class TREX:
             The learned readout noise model as a ``PauliLindbladMap``.
         """
         calibration_result = results[self._program_item_index]
-        if "_trex_cal" not in calibration_result:
+        if "_trex_cal" not in calibration_result and "_meas" not in calibration_result:
             raise ValueError("Dedicated TREX calibration circuit is missing from the results.")
 
-        trex_noise_calibration_data = calibration_result["_trex_cal"]
-        trex_calibration_measurement_flips = calibration_result["measurement_flips._trex_cal"]
+        if "_trex_cal" in calibration_result:
+            warnings.warn(
+                "Register name of '_trex_cal' for TREX calibration result is deprecated. "
+                "Use newer version of qiskit-mitigation to create calibration with `_meas` as register name.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            trex_noise_calibration_data = calibration_result["_trex_cal"]
+            trex_calibration_measurement_flips = calibration_result["measurement_flips._trex_cal"]
+        else:
+            trex_noise_calibration_data = calibration_result["_meas"]
+            trex_calibration_measurement_flips = calibration_result["measurement_flips._meas"]
         noise_calibration_data_flipped = np.logical_xor(
             trex_noise_calibration_data, trex_calibration_measurement_flips
         )

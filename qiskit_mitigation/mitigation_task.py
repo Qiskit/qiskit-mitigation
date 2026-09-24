@@ -602,6 +602,8 @@ class MitigationTask:
         Creates an item for a :class:`~.QuantumProgram`, that can be executed via Executor.
         If a ``quantum_program`` is provided, the new item will be added to the existing program,
         otherwise, a new program will be created, containing only the created item.
+        In the created program item the final measurement layer of the given circuit is removed and a new
+        measurement layer with a dedicated classical register named ``_meas`` is added.
         The basic options creates an item without any mitigation methods applied to the circuit.
         If ``broadcast_obs_and_params`` is True, the observables and parameters will be broadcasted
         using the samplomatic broadcasting rules, to allow attaching some of the parameters to some

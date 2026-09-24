@@ -163,6 +163,8 @@ class PEA(MitigationTask):
         (amplifies the noise by scaling the injected Pauli noise and extrapolates to the zero noise point).
         If a ``quantum_program`` is provided, the new item will be added to the existing program,
         otherwise, a new program will be created, containing only the created item.
+        In the created program item the final measurement layer of the given circuit is removed and a new
+        measurement layer with a dedicated classical register named ``_meas`` is added.
         If ``broadcast_obs_and_params`` is True, the observables and parameters will be broadcasted
         using the samplomatic broadcasting rules, to allow attaching some of the parameters to some
         of the observables. Otherwise, every parameter will be executed for each observable (outer

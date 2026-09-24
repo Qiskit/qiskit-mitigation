@@ -1,0 +1,7 @@
+---
+deprecations:
+  - |
+    Post processing TREX calibration circuit with a register name of `_trex_cal` is deprecated and will not be supported in future versions.
+other:
+  - |
+    The classical register name of the TREX calibration circuit was changed from `_trex_cal` to `_meas` to align with the register names of the rest of the mitigation methods.
