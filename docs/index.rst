@@ -52,6 +52,7 @@ documented in the `release notes <https://quantum.cloud.ibm.com/docs/api/qiskit-
    :caption: API reference
 
    Python API reference <apidocs/index>
+   Release notes <release-notes>
 
 References
 ----------
