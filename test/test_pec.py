@@ -522,6 +522,34 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
         )
         self.assertIsInstance(result, PubResult)
 
+    def test_measurement_flips_expanded_with_meas_qubits(self):
+        """``measurement_flips._meas`` must be expanded when ``meas_qubits`` is provided.
+
+        Covers the branch in ``compute_expectation_value_pec`` where both ``meas_qubits``
+        and ``circuit_num_qubits`` are set and ``measurement_flips._meas`` is present.
+        """
+        # 1 measured qubit out of a 2-qubit circuit; shape (R=2, B=1, S=4, M=1)
+        data = np.zeros((2, 1, 4, 1), dtype=bool)
+        # Flip all-zeros with all-ones so the expanded bit is 1 → ⟨Z⟩ = -1
+        flips = np.ones((2, 1, 4, 1), dtype=bool)
+        pec_signs = np.zeros((2, 1, 1), dtype=bool)
+        item_result = {
+            "_meas": data,
+            "measurement_flips._meas": flips,
+            "pauli_signs": pec_signs,
+        }
+        result = PEC.compute_expectation_value_pec(
+            item_result,
+            observables=self._obs("ZI"),
+            gamma=1.0,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZI")],
+            broadcast_obs_and_params=True,
+            meas_qubits=[0],
+            circuit_num_qubits=2,
+        )
+        self.assertIsInstance(result, PubResult)
+
 
 # ---------------------------------------------------------------------------
 # PEC._process_broadcasted_expectation_values_pec  (static method)
