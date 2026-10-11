@@ -630,6 +630,33 @@ class TestComputeExpectationValueFateFolding(unittest.TestCase):
         pub_result = self._compute(item_results)
         np.testing.assert_allclose(pub_result.data.evs, [-LINEAR_ZERO_NOISE], atol=1e-10)
 
+    def test_measurement_flips_expanded_with_meas_qubits(self):
+        """``measurement_flips._meas`` must be expanded when ``meas_qubits`` is provided.
+
+        Covers the branch in ``compute_expectation_value_gate_folding`` where both ``meas_qubits``
+        and ``circuit_num_qubits`` are set and ``measurement_flips._meas`` is present.
+        """
+        # 1 measured qubit out of a 2-qubit circuit; shape (R, B=1, S, M=1)
+        item_results = [
+            {
+                "_meas": np.zeros((NUM_RANDOMIZATIONS, 1, SHOTS, 1), dtype=bool),
+                "measurement_flips._meas": np.ones((NUM_RANDOMIZATIONS, 1, SHOTS, 1), dtype=bool),
+            }
+            for _ in LINEAR_ONES
+        ]
+        result = GateFolding.compute_expectation_value_gate_folding(
+            item_results,
+            observables=_obs("ZI"),
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZI")],
+            noise_factors=NOISE_FACTORS,
+            extrapolator=["fallback"],
+            broadcast_obs_and_params=True,
+            meas_qubits=[0],
+            circuit_num_qubits=2,
+        )
+        self.assertIsInstance(result, PubResult)
+
     def test_non_broadcast_5d_data_infers_param_shape(self):
         """5-D data in non-broadcast mode must auto-infer ``param_shape`` from ``data_shape[2]``."""
         # 5-D shape: (R, bases, params, S, bits) - use 1 param set
@@ -1082,6 +1109,99 @@ class TestGateFoldingCreateInstanceFromPassthroughData(unittest.TestCase):
         passthrough = self._minimal_passthrough(trex_calibration=True)
         with self.assertRaises(ValueError):
             GateFolding.create_instance_from_passthrough_data(passthrough, trex=None)
+
+
+# ---------------------------------------------------------------------------
+# GateFolding — partial-measurement support
+# ---------------------------------------------------------------------------
+
+
+class TestGateFoldingPartialSupport(unittest.TestCase):
+    """Tests for GateFolding with observables that only cover a subset of circuit qubits."""
+
+    def test_meas_qubits_set_correctly(self):
+        """``prepare`` must compute ``meas_qubits`` from observable support.
+
+        A 4-qubit circuit with a Z observable on qubit 0 only should produce
+        ``meas_qubits == [0]``.
+        """
+        qc = QuantumCircuit(4)
+        qc.h(0)
+        qc.cx(0, 1)
+        obs = [SparsePauliOp.from_sparse_list([("Z", [0], 1.0)], num_qubits=4)]
+
+        gf = GateFolding()
+        gf.prepare(qc, obs, parameters=None, noise_factors=(1, 3), extrapolator=["fallback"])
+
+        self.assertEqual(gf.meas_qubits, [0])
+
+    def test_postprocess_all_zeros_gives_plus_one(self):
+        """Z on qubit 0 of a 4-qubit circuit; compressed all-zeros data → extrapolated ⟨Z⟩ = +1."""
+        qc = QuantumCircuit(4)
+        obs = [SparsePauliOp.from_sparse_list([("Z", [0], 1.0)], num_qubits=4)]
+
+        gf = GateFolding()
+        gf.prepare(
+            qc,
+            obs,
+            parameters=None,
+            noise_factors=(1, 3),
+            extrapolator=["fallback"],
+            shots_per_randomization=4,
+            num_randomizations=1,
+        )
+
+        self.assertEqual(gf.meas_qubits, [0])
+
+        # One compressed item dict per noise factor; shape (R=1, B=1, S=4, M=1)
+        # All zeros → ⟨Z⟩ = +1 at every noise factor → fallback extrapolation gives +1.
+        item_results = [{"_meas": np.zeros((1, 1, 4, 1), dtype=bool)} for _ in range(2)]
+        pub = gf.postprocess(item_results, noise_factors=[1.0, 3.0], extrapolator=["fallback"])
+        np.testing.assert_allclose(pub.data.evs, [1.0], atol=1e-10)
+
+    def test_postprocess_middle_qubit_all_ones(self):
+        """Z on qubit 2 of a 5-qubit circuit; compressed all-ones data → extrapolated ⟨Z⟩ = -1."""
+        qc = QuantumCircuit(5)
+        obs = [SparsePauliOp.from_sparse_list([("Z", [2], 1.0)], num_qubits=5)]
+
+        gf = GateFolding()
+        gf.prepare(
+            qc,
+            obs,
+            parameters=None,
+            noise_factors=(1, 3),
+            extrapolator=["fallback"],
+            shots_per_randomization=4,
+            num_randomizations=1,
+        )
+
+        self.assertEqual(gf.meas_qubits, [2])
+
+        # All-ones → ⟨Z⟩ = -1 at every noise factor → fallback extrapolation gives -1.
+        item_results = [{"_meas": np.ones((1, 1, 4, 1), dtype=bool)} for _ in range(2)]
+        pub = gf.postprocess(item_results, noise_factors=[1.0, 3.0], extrapolator=["fallback"])
+        np.testing.assert_allclose(pub.data.evs, [-1.0], atol=1e-10)
+
+    def test_meas_qubits_round_trips_through_passthrough(self):
+        """``meas_qubits`` stored during ``prepare`` must be restored by
+        ``create_instance_from_passthrough_data``."""
+        passthrough = {
+            "mitigation": "gate_folding",
+            "version": "0.1",
+            "observables": SparsePauliOp("ZI"),
+            "param_basis_pairs": None,
+            "param_shape": None,
+            "broadcast_obs_and_params": True,
+            "meas_bases": None,
+            "meas_qubits": [0],
+            "program_item_index": 0,
+            "trex_calibration": False,
+            "noise_factors": np.array([1.0, 3.0]),
+            "extrapolator": ["fallback"],
+            "extrapolated_noise_factors": None,
+        }
+        gf = GateFolding.create_instance_from_passthrough_data(passthrough)
+        self.assertEqual(gf.meas_qubits, [0])
 
 
 if __name__ == "__main__":
