@@ -961,5 +961,59 @@ class TestPEACreateInstanceFromPassthroughData(unittest.TestCase):
             PEA.create_instance_from_passthrough_data(passthrough, trex=None)
 
 
+class TestPEAPartialSupport(unittest.TestCase):
+    """Tests for PEA with observables that only cover a subset of circuit qubits."""
+
+    def _noise_maps_for_circuit(self, circuit, meas_qubits=None):
+        pea = PEA()
+        boxed = pea._box_circuit(circuit, {}, meas_qubits)
+        refs = {
+            get_annotation(instr.operation, InjectNoise).ref
+            for instr in boxed
+            if get_annotation(instr.operation, InjectNoise) is not None
+        }
+        return {ref: PauliLindbladMap.identity(circuit.num_qubits) for ref in refs}
+
+    def test_measurement_flips_expanded_correctly(self):
+        """PEA: compressed measurement flips are expanded before the XOR.
+        Z on qubit 2 of a 5-qubit circuit; data=zeros, flips=ones → effective |1⟩ on qubit 2.
+        At noise_factor=1, linear extrapolation to zero noise returns the measured value,
+        so the extrapolated ⟨Z⟩ should equal -1.
+        """
+        qc = QuantumCircuit(5)
+        obs = [SparsePauliOp.from_sparse_list([("Z", [2], 1.0)], num_qubits=5)]
+        noise_map = self._noise_maps_for_circuit(qc, meas_qubits=[2])
+
+        pea = PEA()
+        pea.prepare(
+            qc,
+            obs,
+            parameters=None,
+            noise_maps=noise_map,
+            noise_factors=[1, 3],
+            shots_per_randomization=8,
+            num_randomizations=1,
+        )
+
+        self.assertEqual(pea.meas_qubits, [2])
+
+        R, NF, S, M = 1, 2, 8, 1  # randomizations, noise_factors, shots, meas_qubits
+        data_compressed = np.zeros((NF, R, 1, S, M), dtype=bool)  # shape (NF, R, B, S, M)
+        flips_compressed = np.ones((NF, R, 1, S, M), dtype=bool)
+        pea_signs = np.zeros((NF, R, 1, 1), dtype=bool)
+
+        pub = pea.postprocess(
+            {
+                "_meas": data_compressed,
+                "measurement_flips._meas": flips_compressed,
+                "pauli_signs": pea_signs,
+            },
+            noise_factors=[1, 3],
+            extrapolator=["linear"],
+        )
+        # data XOR flips → all-ones → ⟨Z⟩ = -1 at every noise factor → extrapolated = -1
+        np.testing.assert_allclose(pub.data.evs, [-1.0], atol=1e-6)
+
+
 if __name__ == "__main__":
     unittest.main()

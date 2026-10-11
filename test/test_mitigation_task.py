@@ -1203,5 +1203,264 @@ class TestHasProjectionOperators(unittest.TestCase):
         self.assertFalse(MitigationTask._has_projection_operators(obs))
 
 
+class TestGetObservableQubitIndices(unittest.TestCase):
+    """Tests for MitigationTask._get_observable_qubit_indices."""
+
+    def test_pauli_observables(self):
+        """Active qubits come from all non-identity Pauli positions."""
+        obs = ObservablesArray(
+            [SparsePauliOp.from_sparse_list([("ZZ", [1, 3], 1.0)], num_qubits=5)]
+        )
+        self.assertEqual(MitigationTask._get_observable_qubit_indices(obs), [1, 3])
+
+    def test_multiple_observables_union(self):
+        """The union of support across multiple observables is returned."""
+        obs = ObservablesArray(
+            [
+                SparsePauliOp.from_sparse_list([("Z", [0], 1.0)], num_qubits=5),
+                SparsePauliOp.from_sparse_list([("Z", [4], 1.0)], num_qubits=5),
+            ]
+        )
+        self.assertEqual(MitigationTask._get_observable_qubit_indices(obs), [0, 4])
+
+    def test_identity_only_observable(self):
+        """An all-identity observable has no active qubits."""
+        obs = ObservablesArray([SparsePauliOp("IIIII")])
+        self.assertEqual(MitigationTask._get_observable_qubit_indices(obs), [])
+
+    def test_result_is_sorted(self):
+        """Active qubit indices are always returned in ascending order."""
+        obs = ObservablesArray(
+            [SparsePauliOp.from_sparse_list([("ZZ", [4, 1], 1.0)], num_qubits=5)]
+        )
+        result = MitigationTask._get_observable_qubit_indices(obs)
+        self.assertEqual(result, sorted(result))
+
+
+class TestBoxCircuitTargetedMeasurement(unittest.TestCase):
+    """Tests that _box_circuit measures only the requested qubits."""
+
+    def setUp(self):
+        self.task = MitigationTask()
+
+    def test_register_width_equals_meas_qubits(self):
+        """The _meas register should have exactly len(meas_qubits) bits."""
+        qc = _simple_circuit(5)
+        meas_qubits = [1, 3]
+        boxed = self.task._box_circuit(qc, {}, meas_qubits)
+        # Find the _meas classical register
+        meas_cregs = [cr for cr in boxed.cregs if cr.name == "_meas"]
+        self.assertEqual(len(meas_cregs), 1)
+        self.assertEqual(len(meas_cregs[0]), len(meas_qubits))
+
+    def test_full_width_when_no_meas_qubits(self):
+        """Without meas_qubits the register should span all qubits (legacy behaviour)."""
+        qc = _simple_circuit(4)
+        boxed = self.task._box_circuit(qc, {}, meas_qubits=None)
+        meas_cregs = [cr for cr in boxed.cregs if cr.name == "_meas"]
+        self.assertEqual(len(meas_cregs[0]), 4)
+
+
+class TestExpandMeasData(unittest.TestCase):
+    """Tests for MitigationTask._expand_meas_data."""
+
+    def test_correct_columns_placed(self):
+        """Measured columns should end up at the right positions in the expanded array."""
+        meas_qubits = [1, 3]
+        data = np.array([[[True, False]]], dtype=bool)  # shape (1, 1, 2)
+        expanded = MitigationTask._expand_meas_data(data, meas_qubits, circuit_num_qubits=5)
+        self.assertEqual(expanded.shape, (1, 1, 5))
+        self.assertTrue(expanded[0, 0, 1])  # meas_qubits[0]=1 → col 1
+        self.assertFalse(expanded[0, 0, 3])  # meas_qubits[1]=3 → col 3 (False)
+        # Unmeasured columns are zero
+        for q in [0, 2, 4]:
+            self.assertFalse(expanded[0, 0, q])
+
+    def test_multidim_shapes(self):
+        """Expansion works for 4-D and 5-D arrays (standard data shapes)."""
+        meas_qubits = [0, 2]
+        for shape_prefix in [(2, 3, 4), (2, 3, 2, 4)]:
+            data = np.ones((*shape_prefix, 2), dtype=bool)
+            expanded = MitigationTask._expand_meas_data(data, meas_qubits, circuit_num_qubits=4)
+            self.assertEqual(expanded.shape, (*shape_prefix, 4))
+            np.testing.assert_array_equal(expanded[..., meas_qubits], data)
+            np.testing.assert_array_equal(expanded[..., [1, 3]], False)
+
+
+class TestPrepareTargetedMeasurement(unittest.TestCase):
+    """End-to-end test: prepare + postprocess with a partial-support observable."""
+
+    def test_meas_qubits_stored_and_postprocess_correct(self):
+        """A 4-qubit circuit with observable only on qubit 0 should:
+        - store meas_qubits=[0]
+        - produce a 1-bit _meas register in the boxed circuit
+        - give the correct expectation value after postprocessing with synthetic data.
+        """
+        qc = QuantumCircuit(4)
+        qc.h(0)
+        qc.cx(0, 1)
+        obs = [SparsePauliOp.from_sparse_list([("Z", [0], 1.0)], num_qubits=4)]
+
+        task = MitigationTask()
+        task.prepare(
+            circuit=qc,
+            observables=obs,
+            parameters=None,
+            shots_per_randomization=10,
+            num_randomizations=1,
+        )
+
+        # Verify meas_qubits
+        self.assertEqual(task.meas_qubits, [0])
+
+        # Verify boxed circuit register width
+        meas_cregs = [cr for cr in task.boxed_circuit.cregs if cr.name == "_meas"]
+        self.assertEqual(len(meas_cregs[0]), 1)
+
+        # Synthetic data: shape (R=1, B=1, S=10, M=1) — all zeros → qubit 0 = |0⟩ → ⟨Z⟩ = +1
+        data_compressed = np.zeros((1, 1, 10, 1), dtype=bool)
+        item_result = {"_meas": data_compressed}
+
+        pub = task.postprocess(item_result)
+        np.testing.assert_allclose(pub.data.evs, [1.0], atol=1e-10)
+
+    def test_meas_qubits_middle_qubit(self):
+        """Observable on qubit 2 of a 5-qubit circuit; all-ones data → ⟨Z⟩ = -1."""
+        qc = QuantumCircuit(5)
+        obs = [SparsePauliOp.from_sparse_list([("Z", [2], 1.0)], num_qubits=5)]
+
+        task = MitigationTask()
+        task.prepare(
+            circuit=qc,
+            observables=obs,
+            parameters=None,
+            shots_per_randomization=8,
+            num_randomizations=1,
+        )
+
+        self.assertEqual(task.meas_qubits, [2])
+
+        # All-ones compressed data → qubit 2 always |1⟩ → ⟨Z⟩ = -1
+        data_compressed = np.ones((1, 1, 8, 1), dtype=bool)
+        item_result = {"_meas": data_compressed}
+
+        pub = task.postprocess(item_result)
+        np.testing.assert_allclose(pub.data.evs, [-1.0], atol=1e-10)
+
+    def test_non_broadcast_multi_qubit_partial_support(self):
+        """Observable ZZ on qubits 1 and 3 of a 5-qubit circuit.
+        Non-broadcast path (Path A). All zeros → ⟨ZZ⟩ = (+1)(+1) = +1.
+        """
+        qc = QuantumCircuit(5)
+        obs = [SparsePauliOp.from_sparse_list([("ZZ", [1, 3], 1.0)], num_qubits=5)]
+
+        task = MitigationTask()
+        task.prepare(
+            circuit=qc,
+            observables=obs,
+            parameters=None,
+            shots_per_randomization=8,
+            num_randomizations=1,
+        )
+
+        self.assertEqual(task.meas_qubits, [1, 3])
+        meas_cregs = [cr for cr in task.boxed_circuit.cregs if cr.name == "_meas"]
+        self.assertEqual(len(meas_cregs[0]), 2)
+
+        # Compressed data shape (R=1, B=1, S=8, M=2) — all zeros → both qubits |0⟩
+        data_compressed = np.zeros((1, 1, 8, 2), dtype=bool)
+        pub = task.postprocess({"_meas": data_compressed})
+        np.testing.assert_allclose(pub.data.evs, [1.0], atol=1e-10)
+
+    def test_non_broadcast_partial_support_all_ones(self):
+        """ZZ on qubits 1 and 3 of a 5-qubit circuit; all-ones data → ⟨ZZ⟩ = (-1)(-1) = +1."""
+        qc = QuantumCircuit(5)
+        obs = [SparsePauliOp.from_sparse_list([("ZZ", [1, 3], 1.0)], num_qubits=5)]
+
+        task = MitigationTask()
+        task.prepare(
+            circuit=qc,
+            observables=obs,
+            parameters=None,
+            shots_per_randomization=8,
+            num_randomizations=1,
+        )
+
+        data_compressed = np.ones((1, 1, 8, 2), dtype=bool)
+        pub = task.postprocess({"_meas": data_compressed})
+        np.testing.assert_allclose(pub.data.evs, [1.0], atol=1e-10)
+
+    def test_non_broadcast_partial_support_one_flipped(self):
+        """ZZ on qubits 1 and 3; qubit 1=|1⟩, qubit 3=|0⟩ → ⟨ZZ⟩ = (-1)(+1) = -1."""
+        qc = QuantumCircuit(5)
+        obs = [SparsePauliOp.from_sparse_list([("ZZ", [1, 3], 1.0)], num_qubits=5)]
+
+        task = MitigationTask()
+        task.prepare(
+            circuit=qc,
+            observables=obs,
+            parameters=None,
+            shots_per_randomization=8,
+            num_randomizations=1,
+        )
+
+        # Compressed column 0 = qubit 1, column 1 = qubit 3
+        data_compressed = np.zeros((1, 1, 8, 2), dtype=bool)
+        data_compressed[:, :, :, 0] = True  # qubit 1 = |1⟩, qubit 3 = |0⟩
+        pub = task.postprocess({"_meas": data_compressed})
+        np.testing.assert_allclose(pub.data.evs, [-1.0], atol=1e-10)
+
+    def test_broadcast_path_partial_support(self):
+        """Broadcast path with ZZ on qubits 1 and 3 of a 5-qubit circuit.
+        All zeros → ⟨ZZ⟩ = +1.
+        """
+        qc = QuantumCircuit(5)
+        obs = ObservablesArray(
+            [SparsePauliOp.from_sparse_list([("ZZ", [1, 3], 1.0)], num_qubits=5)]
+        )
+
+        task = MitigationTask()
+        task.prepare(
+            circuit=qc,
+            observables=obs,
+            parameters=None,
+            shots_per_randomization=8,
+            num_randomizations=2,
+            broadcast_obs_and_params=True,
+        )
+
+        self.assertEqual(task.meas_qubits, [1, 3])
+
+        # Broadcast data shape (R=2, C=1, S=8, M=2)
+        data_compressed = np.zeros((2, 1, 8, 2), dtype=bool)
+        pub = task.postprocess({"_meas": data_compressed})
+        np.testing.assert_allclose(pub.data.evs, [1.0], atol=1e-10)
+
+    def test_measurement_flips_expanded_correctly(self):
+        """Measurement flips are expanded from compressed to full-circuit width.
+        Compressed data=zeros, flips=ones → effective data=ones → ⟨Z⟩ on qubit 2 = -1.
+        """
+        qc = QuantumCircuit(5)
+        obs = [SparsePauliOp.from_sparse_list([("Z", [2], 1.0)], num_qubits=5)]
+
+        task = MitigationTask()
+        task.prepare(
+            circuit=qc,
+            observables=obs,
+            parameters=None,
+            shots_per_randomization=8,
+            num_randomizations=1,
+        )
+
+        self.assertEqual(task.meas_qubits, [2])
+
+        data_compressed = np.zeros((1, 1, 8, 1), dtype=bool)
+        flips_compressed = np.ones((1, 1, 8, 1), dtype=bool)
+        pub = task.postprocess(
+            {"_meas": data_compressed, "measurement_flips._meas": flips_compressed}
+        )
+        np.testing.assert_allclose(pub.data.evs, [-1.0], atol=1e-10)
+
+
 if __name__ == "__main__":
     unittest.main()

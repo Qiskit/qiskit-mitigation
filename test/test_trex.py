@@ -791,5 +791,72 @@ class TestTREXCreateInstanceFromPassthroughData(unittest.TestCase):
             TREX.create_instance_from_passthrough_data(passthrough)
 
 
+class TestComputeNoiseModelPartialQubits(unittest.TestCase):
+    """Tests for _compute_noise_model_0_1 when only a subset of qubits is measured."""
+
+    def _make_trex(self, meas_qubits):
+        trex = TREX()
+        trex._program_item_index = 0
+        trex.meas_qubits = meas_qubits
+        return trex
+
+    def _fake_result(self, cal_data, flips):
+        """Wrap compressed cal data as a mock QuantumProgramResult."""
+        item = {"_meas": cal_data, "measurement_flips._meas": flips}
+        mock_results = MagicMock()
+        mock_results.__getitem__ = MagicMock(return_value=item)
+        return mock_results
+
+    def test_noise_map_uses_circuit_qubit_index_not_compressed_index(self):
+        """When meas_qubits=[2] on a 5-qubit circuit, the noise map must place the
+        flip rate on qubit 2 (circuit index), not qubit 0 (compressed index).
+        """
+        # Compressed data shape (R, S, M=1) — column 0 corresponds to circuit qubit 2.
+        # All-ones → every shot measured |1⟩ → flip rate = 1.0 on circuit qubit 2.
+        cal_data = np.ones((2, 8, 1), dtype=bool)
+        flips = np.zeros((2, 8, 1), dtype=bool)
+
+        trex = self._make_trex(meas_qubits=[2])
+        noise_model = trex.compute_noise_model(self._fake_result(cal_data, flips))
+
+        # Noise map must span at least up to qubit 2 (num_qubits = max(meas_qubits)+1 = 3)
+        self.assertGreaterEqual(noise_model.num_qubits, 3)
+
+        # The flip rate on circuit qubit 2 should be ~1.0 (all-ones data).
+        # With rate r, pauli_fidelity of Z on qubit 2 = exp(-2r).
+        # We can verify indirectly: TREX.calculate_trex_factor with Z on qubit 2 should
+        # give a factor != 1 (because flip rate is non-zero), while qubit 0 factor = 1.
+        factor_q2 = TREX.calculate_trex_factor(noise_model, "ZII")  # Z on qubit 2 (3-qubit map)
+        factor_q0 = TREX.calculate_trex_factor(noise_model, "IIZ")  # Z on qubit 0
+        self.assertNotAlmostEqual(factor_q2, 1.0, places=3)
+        self.assertAlmostEqual(factor_q0, 1.0, places=10)
+
+    def test_all_zeros_partial_meas_gives_zero_flip_rate(self):
+        """meas_qubits=[1, 3] with all-zero data → zero flip rates → noise map has no rates."""
+        cal_data = np.zeros((2, 8, 2), dtype=bool)
+        flips = np.zeros((2, 8, 2), dtype=bool)
+
+        trex = self._make_trex(meas_qubits=[1, 3])
+        noise_model = trex.compute_noise_model(self._fake_result(cal_data, flips))
+
+        # num_qubits = max([1, 3]) + 1 = 4
+        self.assertEqual(noise_model.num_qubits, 4)
+        # Zero flip rates → identity noise → TREX factors all 1
+        for obs in ["IZII", "IIIZ"]:  # Z on qubit 1, Z on qubit 3
+            factor = TREX.calculate_trex_factor(noise_model, obs)
+            self.assertAlmostEqual(factor, 1.0, places=10)
+
+    def test_meas_qubits_none_falls_back_to_sequential(self):
+        """When meas_qubits is None (legacy), column i maps to circuit qubit i."""
+        cal_data = np.zeros((2, 8, 2), dtype=bool)
+        flips = np.zeros((2, 8, 2), dtype=bool)
+
+        trex = self._make_trex(meas_qubits=None)
+        noise_model = trex.compute_noise_model(self._fake_result(cal_data, flips))
+
+        # Falls back to meas_qubits = [0, 1] → num_qubits = 2
+        self.assertEqual(noise_model.num_qubits, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

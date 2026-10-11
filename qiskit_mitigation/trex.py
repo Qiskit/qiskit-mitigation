@@ -53,6 +53,7 @@ class TREX:
         self.noise_model = None
         self.boxed_circuit = None
         self._program_item_index = None
+        self.meas_qubits: list[int] | None = None
 
     def _edit_boxing_options(
         self, mitigation_task: MitigationTask, boxing_options: dict | None
@@ -125,9 +126,24 @@ class TREX:
                 "A TREX must be connected to at least one mitigation task to create a calibration task."
             )
         circuits = [task.circuit for task in self.tasks]
+        # Union of active (observable-support) qubit indices across all connected tasks.
+        # Falls back to all qubits of the circuit when meas_qubits is not yet set on a task.
+        self.meas_qubits = sorted(
+            {
+                q
+                for task in self.tasks
+                for q in (
+                    task.meas_qubits
+                    if task.meas_qubits is not None
+                    else range(task.circuit.num_qubits)
+                )
+            }
+        )
         self._program_item_index = len(quantum_program.items)
         quantum_program.items.append(
-            self._prepare_calibration_circuit(circuits, num_randomizations, custom_boxing_options)
+            self._prepare_calibration_circuit(
+                circuits, num_randomizations, custom_boxing_options, self.meas_qubits
+            )
         )
 
         data_for_passthrough = {
@@ -211,26 +227,31 @@ class TREX:
         circuits: Sequence[QuantumCircuit],
         num_randomizations: int,
         custom_boxing_options: dict | None = None,
+        meas_qubits: list[int] | None = None,
     ) -> SamplexItem:
         """Creates a TREX calibration circuit.
 
-        The calibration circuit is based on all circuit terminal measurement layers in all pubs.
+        The calibration circuit measures only the qubits in ``meas_qubits``.
 
         Args:
-            circuits: List of circuits to extract relevant qubits from.
+            circuits: List of circuits; used to determine the circuit width when ``meas_qubits``
+                is not provided.
             num_randomizations: The number of TREX calibration randomizations.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+            meas_qubits: Sorted list of qubit indices to measure.  When ``None``, all qubits of
+                the widest circuit are measured (legacy behaviour).
 
         Returns:
             Samplex item containing calibration circuit for TREX factors calculation.
         """
-        # create the combined noise learning layer of all given inputs
         max_num_qubits = max(circuit.num_qubits for circuit in circuits)
+        if meas_qubits is None:
+            meas_qubits = list(range(max_num_qubits))
 
-        classical_cal_reg = ClassicalRegister(max_num_qubits, name="_meas")
+        classical_cal_reg = ClassicalRegister(len(meas_qubits), name="_meas")
         trex_circuit = QuantumCircuit(max_num_qubits)
         trex_circuit.add_register(classical_cal_reg)
-        trex_circuit.measure_all(add_bits=False)
+        trex_circuit.measure([trex_circuit.qubits[q] for q in meas_qubits], classical_cal_reg)
         annotated_trex_circuit = TREX._box_circuit(trex_circuit, custom_boxing_options)
         template_trex_circuit, trex_samplex = build(annotated_trex_circuit)
         trex_calibration_item = SamplexItem(
@@ -282,13 +303,19 @@ class TREX:
             trex_noise_calibration_data, trex_calibration_measurement_flips
         )
         # the shape of the calibration data is (randomizations, shots, measured_qubit)
-        num_qubits = noise_calibration_data_flipped.shape[-1]
+        # meas_qubits maps compressed column index -> original circuit qubit index.
+        # If not set (e.g. loaded from older passthrough), fall back to sequential indexing.
+        meas_qubits = self.meas_qubits
+        num_bits = noise_calibration_data_flipped.shape[-1]
+        if meas_qubits is None:
+            meas_qubits = list(range(num_bits))
+        num_qubits = max(meas_qubits) + 1
         noise_list = []
-        for qubit_index in range(num_qubits):
-            excited_state_count = np.sum(noise_calibration_data_flipped[:, :, qubit_index])
-            total_shots = len(noise_calibration_data_flipped[:, :, qubit_index].flatten())
+        for compressed_idx, circuit_qubit in enumerate(meas_qubits):
+            excited_state_count = np.sum(noise_calibration_data_flipped[:, :, compressed_idx])
+            total_shots = len(noise_calibration_data_flipped[:, :, compressed_idx].flatten())
             flip_rate = excited_state_count / total_shots
-            noise_list.append(("X", [qubit_index], flip_rate))
+            noise_list.append(("X", [circuit_qubit], flip_rate))
         readout_noise = PauliLindbladMap.from_sparse_list(noise_list, num_qubits=num_qubits)
         self.noise_model = readout_noise
         return readout_noise

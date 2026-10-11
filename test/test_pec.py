@@ -1050,5 +1050,86 @@ class TestPECCreateInstanceFromPassthroughData(unittest.TestCase):
             PEC.create_instance_from_passthrough_data(passthrough, trex=None)
 
 
+class TestPECPartialSupport(unittest.TestCase):
+    """End-to-end tests for PEC with observables that only cover a subset of circuit qubits."""
+
+    def _noise_maps_for_circuit(self, circuit, meas_qubits=None):
+        """Return zero-rate noise maps for the given circuit."""
+        pec = PEC()
+        boxed = pec._box_circuit(circuit, {}, meas_qubits)
+        refs = {
+            get_annotation(instr.operation, InjectNoise).ref
+            for instr in boxed
+            if get_annotation(instr.operation, InjectNoise) is not None
+        }
+        return {ref: PauliLindbladMap.identity(circuit.num_qubits) for ref in refs}
+
+    def test_meas_qubits_set_correctly(self):
+        """PEC.prepare stores meas_qubits from the observable support."""
+        qc = QuantumCircuit(4)
+        obs = [SparsePauliOp.from_sparse_list([("Z", [0], 1.0)], num_qubits=4)]
+        noise_map = self._noise_maps_for_circuit(qc, meas_qubits=[0])
+
+        pec = PEC()
+        pec.prepare(
+            qc,
+            obs,
+            parameters=None,
+            noise_maps=noise_map,
+            shots_per_randomization=4,
+            num_randomizations=1,
+        )
+
+        self.assertEqual(pec.meas_qubits, [0])
+        meas_cregs = [cr for cr in pec.boxed_circuit.cregs if cr.name == "_meas"]
+        self.assertEqual(len(meas_cregs[0]), 1)
+
+    def test_postprocess_all_zeros_gives_plus_one(self):
+        """Z on qubit 0 of a 4-qubit circuit; compressed all-zeros data → ⟨Z⟩ = +1."""
+        qc = QuantumCircuit(4)
+        obs = [SparsePauliOp.from_sparse_list([("Z", [0], 1.0)], num_qubits=4)]
+        noise_map = self._noise_maps_for_circuit(qc, meas_qubits=[0])
+
+        pec = PEC()
+        pec.prepare(
+            qc,
+            obs,
+            parameters=None,
+            noise_maps=noise_map,
+            shots_per_randomization=4,
+            num_randomizations=1,
+            scale_randomizations_by_gamma=False,
+        )
+
+        # Compressed data shape (R=1, B=1, S=4, M=1); pauli_signs all False → gamma=+1
+        data = np.zeros((1, 1, 4, 1), dtype=bool)
+        pec_signs = np.zeros((1, 1, 1), dtype=bool)
+        pub = pec.postprocess({"_meas": data, "pauli_signs": pec_signs})
+        np.testing.assert_allclose(pub.data.evs, [1.0], atol=1e-10)
+
+    def test_postprocess_middle_qubit_all_ones(self):
+        """Z on qubit 2 of a 5-qubit circuit; compressed all-ones data → ⟨Z⟩ = -1."""
+        qc = QuantumCircuit(5)
+        obs = [SparsePauliOp.from_sparse_list([("Z", [2], 1.0)], num_qubits=5)]
+        noise_map = self._noise_maps_for_circuit(qc, meas_qubits=[2])
+
+        pec = PEC()
+        pec.prepare(
+            qc,
+            obs,
+            parameters=None,
+            noise_maps=noise_map,
+            shots_per_randomization=4,
+            num_randomizations=1,
+            scale_randomizations_by_gamma=False,
+        )
+
+        self.assertEqual(pec.meas_qubits, [2])
+        data = np.ones((1, 1, 4, 1), dtype=bool)
+        pec_signs = np.zeros((1, 1, 1), dtype=bool)
+        pub = pec.postprocess({"_meas": data, "pauli_signs": pec_signs})
+        np.testing.assert_allclose(pub.data.evs, [-1.0], atol=1e-10)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -106,17 +106,40 @@ class MitigationTask:
         self.param_basis_pairs: list[tuple[tuple[int, ...], str]] | None = None
         self.param_shape = None
         self.meas_bases: list[Pauli] | None = None
+        self.meas_qubits: list[int] | None = None
         self.custom_boxing_options: dict = None
         self.shots_per_randomization: int = None
         self.num_randomizations: int = None
         self.trex: TREX | None = None
         self._program_item_index = None
 
+    @staticmethod
+    def _get_observable_qubit_indices(
+        observables: ObservablesArray | Sequence[SparsePauliOp],
+    ) -> list[int]:
+        """Return the sorted circuit qubit indices that are active in any observable term.
+
+        A qubit is active if at least one term in any observable acts on it with a non-identity
+        operator, including both Pauli operators (X, Y, Z) and projectors (0, 1, +, -, r, l).
+
+        Args:
+            observables: The observables whose support is to be determined.
+
+        Returns:
+            Sorted list of active circuit qubit indices.
+        """
+        obs_array = ObservablesArray(observables)
+        active: set[int] = set()
+        for sparse_obs in obs_array.ravel().sparse_observables_array():
+            active.update(int(q) for q in sparse_obs.indices)
+        return sorted(active)
+
     @classmethod
     def _box_circuit(
         cls,
         circuit: QuantumCircuit,
         boxing_options: dict | None,
+        meas_qubits: list[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -130,6 +153,9 @@ class MitigationTask:
             circuit: The circuit to group into boxes.
             boxing_options: Dictionary of :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` options.
                 If ``None``, default boxing options are used.
+            meas_qubits: Sorted list of circuit qubit indices to measure.  Only these qubits will
+                have a classical bit assigned in the ``_meas`` register.  If ``None``, all qubits
+                are measured (legacy behaviour).
 
         Returns:
             The boxed circuit.
@@ -155,14 +181,21 @@ class MitigationTask:
         # Remove any existing final measurements
         prepared_circuit = circuit.remove_final_measurements(inplace=False)
 
-        # Add final measurements
-        creg = ClassicalRegister(prepared_circuit.num_qubits, "_meas")
+        # Determine which qubits to measure
+        qubits_to_measure = (
+            [prepared_circuit.qubits[q] for q in meas_qubits]
+            if meas_qubits is not None
+            else list(prepared_circuit.qubits)
+        )
+
+        # Add final measurements only on the active qubits
+        creg = ClassicalRegister(len(qubits_to_measure), "_meas")
         try:
             prepared_circuit.add_register(creg)
         except CircuitError as ex:
             raise ValueError("Name `_meas` is reserved for a dedicated classical register.") from ex
         prepared_circuit.barrier()
-        prepared_circuit.measure(prepared_circuit.qubits, creg)
+        prepared_circuit.measure(qubits_to_measure, creg)
 
         try:
             boxing_pm = generate_boxing_pass_manager(**edited_boxing_options)
@@ -207,11 +240,16 @@ class MitigationTask:
             # that may be present is performed without basis changing gates
             samplex_arguments[spec.name] = np.zeros(spec.shape)
 
-        # Finalize basis changing gates for the final measurements
+        # Finalize basis changing gates for the final measurements.
+        # The ChangeBasis box may act on a subset of circuit qubits (those involved in the
+        # measurement box), so slice change_basis to only those qubit positions (in box order).
         for instr in boxed_circuit.reverse_ops():
             op = instr.operation
             if op.name == "box" and (change_basis_annot := get_annotation(op, ChangeBasis)):
-                samplex_arguments[f"basis_changes.{change_basis_annot.ref}"] = change_basis
+                cb_qubits = [boxed_circuit.find_bit(q).index for q in instr.qubits]
+                samplex_arguments[f"basis_changes.{change_basis_annot.ref}"] = change_basis[
+                    :, cb_qubits
+                ]
                 break
         else:
             # This should not be reachable
@@ -512,6 +550,7 @@ class MitigationTask:
         self.num_randomizations = num_randomizations
         self.shots_per_randomization = shots_per_randomization
         self.trex = trex
+        self.meas_qubits = self._get_observable_qubit_indices(self.observables)
 
     def _extract_item_data(
         self,
@@ -648,7 +687,9 @@ class MitigationTask:
             quantum_program,
         )
 
-        boxed_circuit = self._box_circuit(self.circuit, self.custom_boxing_options)
+        boxed_circuit = self._box_circuit(
+            self.circuit, self.custom_boxing_options, self.meas_qubits
+        )
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex
         template, samplex = build(boxed_circuit)
@@ -693,6 +734,7 @@ class MitigationTask:
             "param_shape": self.param_shape,
             "broadcast_obs_and_params": self.broadcast_obs_and_params,
             "meas_bases": meas_bases_str,
+            "meas_qubits": self.meas_qubits,
             "program_item_index": self._program_item_index,
             "trex_calibration": self.trex.has_calibration_result()
             if self.trex is not None
@@ -742,6 +784,8 @@ class MitigationTask:
             meas_bases=self.meas_bases,
             broadcast_obs_and_params=self.broadcast_obs_and_params,
             measure_noise_data=measure_noise_data,
+            meas_qubits=self.meas_qubits,
+            circuit_num_qubits=self.circuit.num_qubits if self.circuit is not None else None,
         )
 
     @staticmethod
@@ -890,9 +934,36 @@ class MitigationTask:
         task.param_shape = param_shape
         task.broadcast_obs_and_params = broadcast_obs_and_params
         task.meas_bases = meas_bases
+        task.meas_qubits = passthrough.get("meas_qubits")
         task._program_item_index = program_item_index
         task.trex = trex
         return task
+
+    @staticmethod
+    def _expand_meas_data(
+        data: np.ndarray,
+        meas_qubits: list[int],
+        circuit_num_qubits: int,
+    ) -> np.ndarray:
+        """Expand compressed measurement data to full-circuit width by padding unmeasured qubits with zeros.
+
+        The last axis of ``data`` contains one bit per measured qubit (in the order given by
+        ``meas_qubits``).  This function returns an array with last-axis length
+        ``circuit_num_qubits`` where column ``meas_qubits[i]`` holds the original column ``i``
+        and all other columns are zero.
+
+        Args:
+            data: Boolean array with last axis of length ``len(meas_qubits)``.
+            meas_qubits: Sorted list of circuit qubit indices that were measured.
+            circuit_num_qubits: Total number of qubits in the original circuit.
+
+        Returns:
+            Array of the same dtype and all leading dimensions, with last axis length
+            ``circuit_num_qubits``.
+        """
+        expanded = np.zeros((*data.shape[:-1], circuit_num_qubits), dtype=data.dtype)
+        expanded[..., meas_qubits] = data
+        return expanded
 
     @staticmethod
     def compute_expectation_value(
@@ -903,6 +974,8 @@ class MitigationTask:
         meas_bases: Sequence[Pauli] | Sequence[str] | PauliList | None = None,
         broadcast_obs_and_params: bool = False,
         measure_noise_data: PauliLindbladMap | np.ndarray | None = None,
+        meas_qubits: list[int] | None = None,
+        circuit_num_qubits: int | None = None,
     ) -> PubResult:
         """Process expectation values for a single item result.
 
@@ -917,6 +990,11 @@ class MitigationTask:
                 correspond to the ``i`` th slice of the data in ``item_result``.
             broadcast_obs_and_params: Whether to broadcast observables and parameter values.
             measure_noise_data: Measurement noise calibration data for TREX mitigation.
+            meas_qubits: Sorted list of circuit qubit indices that were measured.  When provided
+                together with ``circuit_num_qubits``, the data is expanded back to full-circuit
+                width before postprocessing so that observable qubit indices remain correct.
+            circuit_num_qubits: Total number of qubits in the original circuit.  Required when
+                ``meas_qubits`` is provided.
 
         Returns:
             A PubResult which contains ``evs`` and ``std`` as fields in its data, where ``evs`` are expectation values,
@@ -934,6 +1012,17 @@ class MitigationTask:
             data = item_result["_meas"].copy()
         except KeyError as ex:
             raise ValueError("Dedicated creg ``'_meas'`` is missing from the results.") from ex
+
+        # Expand compressed measurement data back to full-circuit width so that all downstream
+        # postprocessing can use observable qubit indices without any remapping.
+        if meas_qubits is not None and circuit_num_qubits is not None:
+            data = MitigationTask._expand_meas_data(data, meas_qubits, circuit_num_qubits)
+            meas_flips_raw = item_result.get("measurement_flips._meas", None)
+            if meas_flips_raw is not None:
+                item_result = dict(item_result)
+                item_result["measurement_flips._meas"] = MitigationTask._expand_meas_data(
+                    meas_flips_raw, meas_qubits, circuit_num_qubits
+                )
 
         trex_scale_factors = (
             TREX.trex_factors_each_term(measure_noise_data, observables)
@@ -986,7 +1075,7 @@ class MitigationTask:
                 f"``item_result['_meas']`` has ``{data.ndim}`` axes, expected ``4`` or ``5``."
             )
 
-        meas_flips = item_result.get("measurement_flips._meas", None)
+        meas_flips = item_result.get("measurement_flips._meas")
         if isinstance(observables, ObservablesArray):
             observables = [
                 SparsePauliOp.from_sparse_observable(sparse_obs)

@@ -95,6 +95,7 @@ class PEC(MitigationTask):
         cls,
         circuit: QuantumCircuit,
         boxing_options: dict | None,
+        meas_qubits: list[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -107,6 +108,8 @@ class PEC(MitigationTask):
         Args:
             circuit: The circuit to group into boxes.
             boxing_options: Dictionary of boxing options. If ``None``, default boxing options are used.
+            meas_qubits: Sorted list of circuit qubit indices to measure.  Forwarded to the base
+                implementation.  If ``None``, all qubits are measured.
 
         Returns:
             The boxed circuit.
@@ -141,7 +144,7 @@ class PEC(MitigationTask):
                 'boxing_options["inject_noise_strategy"] may not be ``no_modification``.'
             )
 
-        return super()._box_circuit(circuit, edited_boxing_options)
+        return super()._box_circuit(circuit, edited_boxing_options, meas_qubits)
 
     def prepare(
         self,
@@ -225,7 +228,9 @@ class PEC(MitigationTask):
             quantum_program,
         )
 
-        boxed_circuit = self._box_circuit(self.circuit, self.custom_boxing_options)
+        boxed_circuit = self._box_circuit(
+            self.circuit, self.custom_boxing_options, self.meas_qubits
+        )
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex
         template, samplex = build(boxed_circuit)
@@ -332,6 +337,7 @@ class PEC(MitigationTask):
             "param_shape": self.param_shape,
             "broadcast_obs_and_params": self.broadcast_obs_and_params,
             "meas_bases": meas_bases_str,
+            "meas_qubits": self.meas_qubits,
             "program_item_index": self._program_item_index,
             "trex_calibration": self.trex.has_calibration_result()
             if self.trex is not None
@@ -383,6 +389,8 @@ class PEC(MitigationTask):
             meas_bases=self.meas_bases,
             broadcast_obs_and_params=self.broadcast_obs_and_params,
             measure_noise_data=measure_noise_data,
+            meas_qubits=self.meas_qubits,
+            circuit_num_qubits=self.circuit.num_qubits if self.circuit is not None else None,
         )
 
     @staticmethod
@@ -583,6 +591,7 @@ class PEC(MitigationTask):
         pec.param_shape = param_shape
         pec.broadcast_obs_and_params = broadcast_obs_and_params
         pec.meas_bases = meas_bases
+        pec.meas_qubits = passthrough.get("meas_qubits")
         pec._program_item_index = program_item_index
         pec.gamma = gamma
         pec.trex = trex
@@ -599,6 +608,8 @@ class PEC(MitigationTask):
         meas_bases: Sequence[Pauli] | Sequence[str] | PauliList | None = None,
         broadcast_obs_and_params: bool = False,
         measure_noise_data: PauliLindbladMap | np.ndarray | None = None,
+        meas_qubits: list[int] | None = None,
+        circuit_num_qubits: int | None = None,
     ) -> PubResult:
         """Process expectation values for a single pec mitigated item result.
 
@@ -614,6 +625,11 @@ class PEC(MitigationTask):
                 correspond to the ``i`` th slice of the data in ``item_result``.
             broadcast_obs_and_params: Whether to broadcast observables and parameter values.
             measure_noise_data: Measurement noise calibration data for TREX mitigation.
+            meas_qubits: The indices of qubits that were measured, when partial measurements are
+                used. If ``None``, full measurements are assumed.
+            circuit_num_qubits: The total number of qubits in the circuit, used together with
+                ``meas_qubits`` to expand partial measurement data back to full width. If ``None``,
+                full measurements are assumed.
 
         Returns:
             A PubResult which contains ``evs`` and ``std`` as fields in its data, where ``evs`` are expectation values,
@@ -633,8 +649,18 @@ class PEC(MitigationTask):
         except KeyError as ex:
             raise ValueError("Dedicated creg ``'_meas'`` is missing from the results.") from ex
 
+        # Expand compressed measurement data back to full-circuit width.
+        if meas_qubits is not None and circuit_num_qubits is not None:
+            data = MitigationTask._expand_meas_data(data, meas_qubits, circuit_num_qubits)
+            meas_flips_raw = item_result.get("measurement_flips._meas", None)
+            if meas_flips_raw is not None:
+                item_result = dict(item_result)
+                item_result["measurement_flips._meas"] = MitigationTask._expand_meas_data(
+                    meas_flips_raw, meas_qubits, circuit_num_qubits
+                )
+
         # extract pec_old signs if present
-        pec_signs = item_result.get("pauli_signs", None)
+        pec_signs = item_result.get("pauli_signs")
         if pec_signs is None:
             raise ValueError("Results must contain ``'pauli_signs'`` in the data if PEC is used.")
 
@@ -688,7 +714,7 @@ class PEC(MitigationTask):
                 f"``item_result['_meas']`` has ``{data.ndim}`` axes, expected ``4`` or ``5``."
             )
 
-        meas_flips = item_result.get("measurement_flips._meas", None)
+        meas_flips = item_result.get("measurement_flips._meas")
         if isinstance(observables, ObservablesArray):
             observables = [
                 SparsePauliOp.from_sparse_observable(sparse_obs)
