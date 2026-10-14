@@ -135,7 +135,11 @@ def find_combined_unique_layers(
         boxing_options_list = custom_boxing_options
 
     boxed_circuits = (
-        task._box_circuit(circuit, boxing_options)
+        task._box_circuit(
+            circuit,
+            boxing_options,
+            task.meas_qubits,
+        )
         for task, circuit, boxing_options in zip(
             mitigation_types, circuits, boxing_options_list, strict=True
         )

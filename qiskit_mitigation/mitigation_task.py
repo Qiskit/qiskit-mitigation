@@ -243,11 +243,11 @@ class MitigationTask:
 
         # Finalize basis changing gates for the final measurements.
         # The ChangeBasis box may act on a subset of circuit qubits (those involved in the
-        # measurement box), so slice change_basis to only those qubit positions (in box order).
+        # measurement box), so slice change_basis to only those qubit positions (in ascending circuit qubit order).
         for instr in boxed_circuit.reverse_ops():
             op = instr.operation
             if op.name == "box" and (change_basis_annot := get_annotation(op, ChangeBasis)):
-                cb_qubits = [boxed_circuit.find_bit(q).index for q in instr.qubits]
+                cb_qubits = sorted(boxed_circuit.find_bit(q).index for q in instr.qubits)
                 samplex_arguments[f"basis_changes.{change_basis_annot.ref}"] = change_basis[
                     :, cb_qubits
                 ]
