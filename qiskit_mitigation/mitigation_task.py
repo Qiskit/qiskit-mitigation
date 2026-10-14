@@ -1017,12 +1017,14 @@ class MitigationTask:
         # postprocessing can use observable qubit indices without any remapping.
         if meas_qubits is not None and circuit_num_qubits is not None:
             data = MitigationTask._expand_meas_data(data, meas_qubits, circuit_num_qubits)
-            meas_flips_raw = item_result.get("measurement_flips._meas", None)
-            if meas_flips_raw is not None:
-                item_result = dict(item_result)
-                item_result["measurement_flips._meas"] = MitigationTask._expand_meas_data(
-                    meas_flips_raw, meas_qubits, circuit_num_qubits
-                )
+        elif (meas_qubits is None) != (circuit_num_qubits is None):
+            raise ValueError(
+                "``meas_qubits`` and ``circuit_num_qubits`` must be provided together, "
+                "but only one was given."
+            )
+        meas_flips = item_result.get("measurement_flips._meas", None)
+        if meas_flips is not None and meas_qubits is not None:
+            meas_flips = MitigationTask._expand_meas_data(meas_flips, meas_qubits, circuit_num_qubits)
 
         trex_scale_factors = (
             TREX.trex_factors_each_term(measure_noise_data, observables)
@@ -1044,8 +1046,8 @@ class MitigationTask:
                 )
 
             # Apply measurement flips if present
-            if "measurement_flips._meas" in item_result:
-                data ^= item_result["measurement_flips._meas"]
+            if meas_flips is not None:
+                data ^= meas_flips
 
             if isinstance(observables, SparsePauliOp):
                 observables = ObservablesArray.coerce(observables)
@@ -1075,7 +1077,6 @@ class MitigationTask:
                 f"``item_result['_meas']`` has ``{data.ndim}`` axes, expected ``4`` or ``5``."
             )
 
-        meas_flips = item_result.get("measurement_flips._meas")
         if isinstance(observables, ObservablesArray):
             observables = [
                 SparsePauliOp.from_sparse_observable(sparse_obs)
