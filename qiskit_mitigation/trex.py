@@ -54,6 +54,7 @@ class TREX:
         self.boxed_circuit = None
         self._program_item_index = None
         self.meas_qubits: list[int] | None = None
+        self.circuit_num_qubits: int | None = None
 
     def _edit_boxing_options(
         self, mitigation_task: MitigationTask, boxing_options: dict | None
@@ -100,6 +101,8 @@ class TREX:
         trex_task = TREX()
         trex_task.VERSION = version
         trex_task._program_item_index = program_item_index
+        trex_task.meas_qubits = passthrough.get("meas_qubits")
+        trex_task.circuit_num_qubits = passthrough.get("circuit_num_qubits")
         return trex_task
 
     def prepare(
@@ -139,6 +142,7 @@ class TREX:
                 )
             }
         )
+        self.circuit_num_qubits = max(circuit.num_qubits for circuit in circuits)
         self._program_item_index = len(quantum_program.items)
         quantum_program.items.append(
             self._prepare_calibration_circuit(
@@ -149,6 +153,8 @@ class TREX:
         data_for_passthrough = {
             "version": self.VERSION,
             "mitigation": "trex",
+            "meas_qubits": self.meas_qubits,
+            "circuit_num_qubits": self.circuit_num_qubits,
             "program_item_index": self._program_item_index,
         }
 
@@ -309,7 +315,10 @@ class TREX:
         num_bits = noise_calibration_data_flipped.shape[-1]
         if meas_qubits is None:
             meas_qubits = list(range(num_bits))
-        num_qubits = max(meas_qubits) + 1
+        if self.circuit_num_qubits is not None:
+            num_qubits = self.circuit_num_qubits
+        else:
+            num_qubits = max(meas_qubits) + 1 if len(meas_qubits) > 0 else 0
         noise_list = []
         for compressed_idx, circuit_qubit in enumerate(meas_qubits):
             excited_state_count = np.sum(noise_calibration_data_flipped[:, :, compressed_idx])
@@ -345,6 +354,10 @@ class TREX:
                 ("Z" * len(sparse_pauli.indices), sparse_pauli.indices),
                 num_qubits=num_qubits,
             )
+            if noise_data.num_qubits != num_qubits:
+                noise_data = PauliLindbladMap.from_sparse_list(
+                    noise_data.to_sparse_list(), num_qubits=num_qubits
+                )
             trex_factor: float = 1 / noise_data.pauli_fidelity(z_sparse_pauli)
             return trex_factor
         # The input is a result of TREX calibration execution treat every non identity Pauli as Z

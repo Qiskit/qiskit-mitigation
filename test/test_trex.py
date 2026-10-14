@@ -22,7 +22,7 @@ from qiskit.circuit import QuantumCircuit
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, QubitSparsePauli, SparsePauliOp
 from qiskit_mitigation.trex import TREX
-from samplomatic.quantum_program import SamplexItem
+from samplomatic.quantum_program import QuantumProgram, SamplexItem
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -856,6 +856,52 @@ class TestComputeNoiseModelPartialQubits(unittest.TestCase):
 
         # Falls back to meas_qubits = [0, 1] → num_qubits = 2
         self.assertEqual(noise_model.num_qubits, 2)
+
+    def test_noise_map_uses_circuit_num_qubits_when_set(self):
+        """When circuit_num_qubits is set, the noise map num_qubits matches it."""
+        cal_data = np.zeros((2, 8, 2), dtype=bool)
+        flips = np.zeros((2, 8, 2), dtype=bool)
+
+        trex = self._make_trex(meas_qubits=[0, 1])
+        trex.circuit_num_qubits = 156
+        noise_model = trex.compute_noise_model(self._fake_result(cal_data, flips))
+
+        self.assertEqual(noise_model.num_qubits, 156)
+
+    def test_calculate_trex_factor_mismatched_qubits(self):
+        """calculate_trex_factor handles mismatched qubit counts between noise map and observable."""
+        error_rate = -0.5 * np.log(1.0 - 2.0 * 0.1)
+        noise_2q = PauliLindbladMap.from_sparse_list([("X", [0], error_rate)], num_qubits=2)
+
+        # 156-qubit identity observable
+        factor_id = TREX.calculate_trex_factor(noise_2q, "I" * 156)
+        self.assertAlmostEqual(factor_id, 1.0)
+
+        # 156-qubit observable with Z on qubit 0 (last character in Pauli string)
+        obs_156 = "I" * 155 + "Z"
+        factor_z = TREX.calculate_trex_factor(noise_2q, obs_156)
+        self.assertAlmostEqual(factor_z, 1 / (1 - 2 * 0.1))
+
+    def test_passthrough_contains_meas_qubits_and_circuit_num_qubits(self):
+        """TREX.prepare and create_instance_from_passthrough_data round-trip meas_qubits and circuit_num_qubits."""
+        qc = QuantumCircuit(5)
+        task = MagicMock()
+        task.circuit = qc
+        task.meas_qubits = [1, 3]
+
+        trex = TREX()
+        trex.tasks.append(task)
+
+        qp = QuantumProgram(shots=100)
+        trex.prepare(num_randomizations=2, quantum_program=qp)
+
+        passthrough = qp.passthrough_data["qiskit_mitigation"][0]
+        self.assertEqual(passthrough["meas_qubits"], [1, 3])
+        self.assertEqual(passthrough["circuit_num_qubits"], 5)
+
+        restored_trex = TREX.create_instance_from_passthrough_data(passthrough)
+        self.assertEqual(restored_trex.meas_qubits, [1, 3])
+        self.assertEqual(restored_trex.circuit_num_qubits, 5)
 
 
 if __name__ == "__main__":
