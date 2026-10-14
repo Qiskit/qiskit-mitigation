@@ -107,6 +107,7 @@ class MitigationTask:
         self.param_shape = None
         self.meas_bases: list[Pauli] | None = None
         self.meas_qubits: list[int] | None = None
+        self.circuit_num_qubits: int | None = None
         self.custom_boxing_options: dict = None
         self.shots_per_randomization: int = None
         self.num_randomizations: int = None
@@ -551,6 +552,7 @@ class MitigationTask:
         self.shots_per_randomization = shots_per_randomization
         self.trex = trex
         self.meas_qubits = self._get_observable_qubit_indices(self.observables)
+        self.circuit_num_qubits = circuit.num_qubits
 
     def _extract_item_data(
         self,
@@ -735,6 +737,7 @@ class MitigationTask:
             "broadcast_obs_and_params": self.broadcast_obs_and_params,
             "meas_bases": meas_bases_str,
             "meas_qubits": self.meas_qubits,
+            "circuit_num_qubits": self.circuit_num_qubits,
             "program_item_index": self._program_item_index,
             "trex_calibration": self.trex.has_calibration_result()
             if self.trex is not None
@@ -785,7 +788,7 @@ class MitigationTask:
             broadcast_obs_and_params=self.broadcast_obs_and_params,
             measure_noise_data=measure_noise_data,
             meas_qubits=self.meas_qubits,
-            circuit_num_qubits=self.circuit.num_qubits if self.circuit is not None else None,
+            circuit_num_qubits=self.circuit_num_qubits,
         )
 
     @staticmethod
@@ -935,6 +938,7 @@ class MitigationTask:
         task.broadcast_obs_and_params = broadcast_obs_and_params
         task.meas_bases = meas_bases
         task.meas_qubits = passthrough.get("meas_qubits")
+        task.circuit_num_qubits = passthrough.get("circuit_num_qubits")
         task._program_item_index = program_item_index
         task.trex = trex
         return task

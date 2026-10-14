@@ -410,6 +410,7 @@ class GateFolding(MitigationTask):
             "broadcast_obs_and_params": self.broadcast_obs_and_params,
             "meas_bases": meas_bases_str,
             "meas_qubits": self.meas_qubits,
+            "circuit_num_qubits": self.circuit_num_qubits,
             "program_item_index": self._program_item_index,
             "trex_calibration": self.trex.has_calibration_result()
             if self.trex is not None
@@ -516,7 +517,7 @@ class GateFolding(MitigationTask):
             broadcast_obs_and_params=self.broadcast_obs_and_params,
             custom_fit=custom_fit,
             meas_qubits=self.meas_qubits,
-            circuit_num_qubits=self.circuit.num_qubits if self.circuit is not None else None,
+            circuit_num_qubits=self.circuit_num_qubits,
         )
 
     @staticmethod
@@ -810,6 +811,7 @@ class GateFolding(MitigationTask):
         gf.broadcast_obs_and_params = broadcast_obs_and_params
         gf.meas_bases = meas_bases
         gf.meas_qubits = passthrough.get("meas_qubits")
+        gf.circuit_num_qubits = passthrough.get("circuit_num_qubits")
         gf._program_item_index = program_item_index
         gf.noise_factors = noise_factors
         gf.extrapolator = extrapolator

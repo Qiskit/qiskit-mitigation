@@ -338,6 +338,7 @@ class PEC(MitigationTask):
             "broadcast_obs_and_params": self.broadcast_obs_and_params,
             "meas_bases": meas_bases_str,
             "meas_qubits": self.meas_qubits,
+            "circuit_num_qubits": self.circuit_num_qubits,
             "program_item_index": self._program_item_index,
             "trex_calibration": self.trex.has_calibration_result()
             if self.trex is not None
@@ -390,7 +391,7 @@ class PEC(MitigationTask):
             broadcast_obs_and_params=self.broadcast_obs_and_params,
             measure_noise_data=measure_noise_data,
             meas_qubits=self.meas_qubits,
-            circuit_num_qubits=self.circuit.num_qubits if self.circuit is not None else None,
+            circuit_num_qubits=self.circuit_num_qubits,
         )
 
     @staticmethod
@@ -592,6 +593,7 @@ class PEC(MitigationTask):
         pec.broadcast_obs_and_params = broadcast_obs_and_params
         pec.meas_bases = meas_bases
         pec.meas_qubits = passthrough.get("meas_qubits")
+        pec.circuit_num_qubits = passthrough.get("circuit_num_qubits")
         pec._program_item_index = program_item_index
         pec.gamma = gamma
         pec.trex = trex
