@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Literal
 
 from qiskit import QuantumCircuit
 from qiskit.circuit import BoxOp, CircuitInstruction
+from qiskit.primitives.containers.observables_array import ObservablesArray
+from qiskit.quantum_info import SparsePauliOp
 from samplomatic.quantum_program import QuantumProgramResult
 from samplomatic.utils import find_unique_box_instructions, undress_box
 
@@ -96,6 +98,7 @@ def load_tasks_from_result(
 
 def find_combined_unique_layers(
     circuits: list[QuantumCircuit],
+    observables: Sequence[ObservablesArray | Sequence[SparsePauliOp]],
     mitigation_types: list[MitigationTask] | None = None,
     custom_boxing_options: dict | list[dict] | None = None,
     box_types: Literal["gates", "measurement", "all"] = "all",
@@ -103,12 +106,15 @@ def find_combined_unique_layers(
     """Return the unique boxed layers found across the given circuits using the given boxing options.
 
     The returned list contains one instance of each distinct boxed layer (represented as a :class:`~.CircuitInstruction`) appearing in the input circuits.
+    Only the qubits in the support of each circuit's observables are measured, and this affects the boxing.
     Some mitigation methods enforce relevant boxing options. By supllying the wanted mitigation methods, these options are enforced when boxing the circuits to find unique layers.
     Supplying the wanted mitigation methods is recommended to ensure that the unique layers used for learning wiil be equal to those used in execution.
     The returned boxes can be filtered so only boxes containing measurements, only boxes containing solely gates or all types of boxes are returned.
 
     Args:
         circuits: The circuit to find the unique layers for.
+        observables: The observables of each circuit, used to determine which qubits are measured.
+            Must be the same length as ``circuits``.
         mitigation_types: List of initiated mitigation classes that the circuits will be mitigated with. Each mitigation method might enforce boxing options that will affect the unique layers.
             If given, the list must be the same length as ``circuits``.
         custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function to find the unique layers.
@@ -120,6 +126,8 @@ def find_combined_unique_layers(
     """
     from qiskit_mitigation.mitigation_task import MitigationTask
 
+    if len(observables) != len(circuits):
+        raise ValueError("Number of observable arrays does not match number of circuits.")
     if mitigation_types is None:
         mitigation_types = [MitigationTask()] * len(circuits)
     if len(mitigation_types) != len(circuits):
@@ -135,13 +143,9 @@ def find_combined_unique_layers(
         boxing_options_list = custom_boxing_options
 
     boxed_circuits = (
-        task._box_circuit(
-            circuit,
-            boxing_options,
-            task.meas_qubits,
-        )
-        for task, circuit, boxing_options in zip(
-            mitigation_types, circuits, boxing_options_list, strict=True
+        task._box_circuit(circuit, boxing_options, task._get_observable_qubit_indices(obs))
+        for task, circuit, obs, boxing_options in zip(
+            mitigation_types, circuits, observables, boxing_options_list, strict=True
         )
     )
     instructions = (box for boxed_circuit in boxed_circuits for box in boxed_circuit)

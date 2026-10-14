@@ -439,12 +439,19 @@ class TestFindBoxType(unittest.TestCase):
 class TestFindCombinedUniqueLayersValidation(unittest.TestCase):
     def setUp(self):
         self.circuit = _simple_circuit()
+        self.observables = [SparsePauliOp("ZZ")]
+
+    def test_raises_when_observables_length_mismatch(self):
+        """Supplying fewer observables than circuits must raise ValueError."""
+        with self.assertRaises(ValueError):
+            find_combined_unique_layers([self.circuit, self.circuit], observables=self.observables)
 
     def test_raises_when_mitigation_types_length_mismatch(self):
         """Supplying fewer mitigation_types than circuits must raise ValueError."""
         with self.assertRaises(ValueError):
             find_combined_unique_layers(
                 [self.circuit, self.circuit],
+                observables=self.observables * 2,
                 mitigation_types=[MitigationTask()],
             )
 
@@ -453,20 +460,38 @@ class TestFindCombinedUniqueLayersValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             find_combined_unique_layers(
                 [self.circuit, self.circuit],
+                observables=self.observables * 2,
                 custom_boxing_options=[{}, {}, {}],
             )
 
     def test_returns_list(self):
         """The return type must be a list."""
-        result = find_combined_unique_layers([self.circuit])
+        result = find_combined_unique_layers([self.circuit], observables=self.observables)
         self.assertIsInstance(result, list)
 
     def test_each_element_is_circuit_instruction(self):
         """Every returned element must be a CircuitInstruction."""
-        layers = find_combined_unique_layers([self.circuit])
+        layers = find_combined_unique_layers([self.circuit], observables=self.observables)
         self.assertTrue(len(layers) > 0)
         for layer in layers:
             self.assertIsInstance(layer, CircuitInstruction)
+
+    def test_layers_follow_observable_support(self):
+        """Qubits outside the observable support are not measured, which changes the layers."""
+        circuit = QuantumCircuit(3)
+        circuit.sx(0)
+        circuit.cz(0, 1)
+        circuit.sx(1)
+        circuit.cz(1, 2)
+        circuit.sx(2)
+        circuit.sx(0)
+
+        layers_full = find_combined_unique_layers([circuit], observables=[SparsePauliOp("ZZZ")])
+        layers_partial = find_combined_unique_layers([circuit], observables=[SparsePauliOp("IZZ")])
+
+        # The unmeasured qubit 2 is boxed separately from the measurement box.
+        self.assertNotIn(1, {layer.operation.num_qubits for layer in layers_full})
+        self.assertIn(1, {layer.operation.num_qubits for layer in layers_partial})
 
 
 # ---------------------------------------------------------------------------
@@ -479,6 +504,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
 
     def setUp(self):
         self.circuit = _simple_circuit()
+        self.observables = [SparsePauliOp("ZZ")]
 
     # --- box_types='all' ---
 
@@ -488,7 +514,10 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         pec = PEC()
         tasks = [task_unmitigated, pec]
         combined_layers = find_combined_unique_layers(
-            [self.circuit, self.circuit], mitigation_types=tasks, box_types="all"
+            [self.circuit, self.circuit],
+            observables=self.observables * 2,
+            mitigation_types=tasks,
+            box_types="all",
         )
         # PEC boxing adds an extra gate box; combined result has gates + measurement types
         types = {_find_box_type(layer) for layer in combined_layers}
@@ -497,7 +526,9 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
 
     def test_all_without_mitigation_types(self):
         """box_types='all' without mitigation_types defaults to MitigationTask boxing."""
-        layers = find_combined_unique_layers([self.circuit, self.circuit], box_types="all")
+        layers = find_combined_unique_layers(
+            [self.circuit, self.circuit], observables=self.observables * 2, box_types="all"
+        )
         types = {_find_box_type(layer) for layer in layers}
         self.assertIn("gates", types)
         self.assertIn("measurement", types)
@@ -505,7 +536,10 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_all_with_single_mitigation_task(self):
         """box_types='all' with a single MitigationTask returns gate and measurement layers."""
         layers = find_combined_unique_layers(
-            [self.circuit], mitigation_types=[MitigationTask()], box_types="all"
+            [self.circuit],
+            observables=self.observables,
+            mitigation_types=[MitigationTask()],
+            box_types="all",
         )
         self.assertTrue(len(layers) > 0)
         types = {_find_box_type(layer) for layer in layers}
@@ -515,7 +549,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_all_with_single_pec(self):
         """box_types='all' with a single PEC task returns gate and measurement layers."""
         layers = find_combined_unique_layers(
-            [self.circuit], mitigation_types=[PEC()], box_types="all"
+            [self.circuit], observables=self.observables, mitigation_types=[PEC()], box_types="all"
         )
         self.assertTrue(len(layers) > 0)
         types = {_find_box_type(layer) for layer in layers}
@@ -530,7 +564,10 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         pec = PEC()
         tasks = [task_unmitigated, pec]
         combined_layers = find_combined_unique_layers(
-            [self.circuit, self.circuit], mitigation_types=tasks, box_types="gates"
+            [self.circuit, self.circuit],
+            observables=self.observables * 2,
+            mitigation_types=tasks,
+            box_types="gates",
         )
         self.assertTrue(len(combined_layers) > 0, "Expected at least one gate box")
         for layer in combined_layers:
@@ -538,7 +575,9 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
 
     def test_gates_only_without_mitigation_types(self):
         """box_types='gates' without mitigation_types returns only gate boxes."""
-        layers = find_combined_unique_layers([self.circuit, self.circuit], box_types="gates")
+        layers = find_combined_unique_layers(
+            [self.circuit, self.circuit], observables=self.observables * 2, box_types="gates"
+        )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
             self.assertEqual(_find_box_type(layer), "gates")
@@ -546,7 +585,10 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_gates_only_with_single_mitigation_task(self):
         """box_types='gates' with a single MitigationTask returns only gate boxes."""
         layers = find_combined_unique_layers(
-            [self.circuit], mitigation_types=[MitigationTask()], box_types="gates"
+            [self.circuit],
+            observables=self.observables,
+            mitigation_types=[MitigationTask()],
+            box_types="gates",
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
@@ -555,7 +597,10 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_gates_only_with_single_pec(self):
         """box_types='gates' with a single PEC task returns only gate boxes."""
         layers = find_combined_unique_layers(
-            [self.circuit], mitigation_types=[PEC()], box_types="gates"
+            [self.circuit],
+            observables=self.observables,
+            mitigation_types=[PEC()],
+            box_types="gates",
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
@@ -569,7 +614,10 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         pec = PEC()
         tasks = [task_unmitigated, pec]
         combined_layers = find_combined_unique_layers(
-            [self.circuit, self.circuit], mitigation_types=tasks, box_types="measurement"
+            [self.circuit, self.circuit],
+            observables=self.observables * 2,
+            mitigation_types=tasks,
+            box_types="measurement",
         )
         self.assertTrue(len(combined_layers) > 0, "Expected at least one measurement box")
         for layer in combined_layers:
@@ -577,7 +625,9 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
 
     def test_measurement_only_without_mitigation_types(self):
         """box_types='measurement' without mitigation_types returns only measurement boxes."""
-        layers = find_combined_unique_layers([self.circuit, self.circuit], box_types="measurement")
+        layers = find_combined_unique_layers(
+            [self.circuit, self.circuit], observables=self.observables * 2, box_types="measurement"
+        )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
             self.assertEqual(_find_box_type(layer), "measurement")
@@ -585,7 +635,10 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_measurement_only_with_single_mitigation_task(self):
         """box_types='measurement' with a single MitigationTask returns only measurement boxes."""
         layers = find_combined_unique_layers(
-            [self.circuit], mitigation_types=[MitigationTask()], box_types="measurement"
+            [self.circuit],
+            observables=self.observables,
+            mitigation_types=[MitigationTask()],
+            box_types="measurement",
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
@@ -594,7 +647,10 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_measurement_only_with_single_pec(self):
         """box_types='measurement' with a single PEC task returns only measurement boxes."""
         layers = find_combined_unique_layers(
-            [self.circuit], mitigation_types=[PEC()], box_types="measurement"
+            [self.circuit],
+            observables=self.observables,
+            mitigation_types=[PEC()],
+            box_types="measurement",
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
@@ -604,18 +660,26 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
 
     def test_duplicate_circuits_produce_same_unique_layers_as_single_circuit(self):
         """Passing the same circuit twice must not duplicate the unique layers."""
-        single = find_combined_unique_layers([self.circuit], box_types="all")
-        doubled = find_combined_unique_layers([self.circuit, self.circuit], box_types="all")
+        single = find_combined_unique_layers(
+            [self.circuit], observables=self.observables, box_types="all"
+        )
+        doubled = find_combined_unique_layers(
+            [self.circuit, self.circuit], observables=self.observables * 2, box_types="all"
+        )
         self.assertEqual(len(single), len(doubled))
 
     def test_pec_produces_more_gate_boxes_than_mitigation_task(self):
         """PEC boxing introduces an extra injection box, so combining MitigationTask + PEC
         must yield more gate-type unique layers than MitigationTask alone."""
         layers_task = find_combined_unique_layers(
-            [self.circuit], mitigation_types=[MitigationTask()], box_types="gates"
+            [self.circuit],
+            observables=self.observables,
+            mitigation_types=[MitigationTask()],
+            box_types="gates",
         )
         layers_combined = find_combined_unique_layers(
             [self.circuit, self.circuit],
+            observables=self.observables * 2,
             mitigation_types=[MitigationTask(), PEC()],
             box_types="gates",
         )
@@ -627,6 +691,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         """A single dict passed as custom_boxing_options must work for multiple circuits."""
         layers = find_combined_unique_layers(
             [self.circuit, self.circuit],
+            observables=self.observables * 2,
             custom_boxing_options={"enable_measures": True},
             box_types="all",
         )
@@ -636,6 +701,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         """A list of boxing-option dicts (one per circuit) must be accepted."""
         layers = find_combined_unique_layers(
             [self.circuit, self.circuit],
+            observables=self.observables * 2,
             custom_boxing_options=[{"enable_measures": True}, {"enable_measures": True}],
             box_types="all",
         )
