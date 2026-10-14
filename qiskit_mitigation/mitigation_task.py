@@ -1024,7 +1024,9 @@ class MitigationTask:
             )
         meas_flips = item_result.get("measurement_flips._meas", None)
         if meas_flips is not None and meas_qubits is not None:
-            meas_flips = MitigationTask._expand_meas_data(meas_flips, meas_qubits, circuit_num_qubits)
+            meas_flips = MitigationTask._expand_meas_data(
+                meas_flips, meas_qubits, circuit_num_qubits
+            )
 
         trex_scale_factors = (
             TREX.trex_factors_each_term(measure_noise_data, observables)

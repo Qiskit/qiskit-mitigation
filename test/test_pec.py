@@ -295,9 +295,7 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
         """Providing ``meas_qubits`` without ``circuit_num_qubits`` must raise ``ValueError``."""
         result = {"_meas": np.zeros((2, 1, 4, 1), dtype=bool), "pauli_signs": np.zeros((2, 1))}
         with self.assertRaises(ValueError):
-            PEC.compute_expectation_value_pec(
-                result, self._obs("Z"), gamma=1.0, meas_qubits=[0]
-            )
+            PEC.compute_expectation_value_pec(result, self._obs("Z"), gamma=1.0, meas_qubits=[0])
 
     def test_raises_when_only_circuit_num_qubits_provided(self):
         """Providing ``circuit_num_qubits`` without ``meas_qubits`` must raise ``ValueError``."""
