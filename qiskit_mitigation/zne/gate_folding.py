@@ -990,7 +990,11 @@ class GateFolding(MitigationTask):
                     "but only one was given."
                 )
             meas_flips = item_result.get("measurement_flips._meas", None)
-            if meas_flips is not None and meas_qubits is not None:
+            if (
+                meas_flips is not None
+                and meas_qubits is not None
+                and circuit_num_qubits is not None
+            ):
                 meas_flips = MitigationTask._expand_meas_data(
                     meas_flips, meas_qubits, circuit_num_qubits
                 )
