@@ -630,6 +630,36 @@ class TestComputeExpectationValueFateFolding(unittest.TestCase):
         pub_result = self._compute(item_results)
         np.testing.assert_allclose(pub_result.data.evs, [-LINEAR_ZERO_NOISE], atol=1e-10)
 
+    def test_raises_when_only_meas_qubits_provided(self):
+        """Providing ``meas_qubits`` without ``circuit_num_qubits`` must raise ``ValueError``."""
+        item_results = [{"_meas": np.zeros((2, 1, 4, 1), dtype=bool)} for _ in LINEAR_ONES]
+        with self.assertRaises(ValueError):
+            GateFolding.compute_expectation_value_gate_folding(
+                item_results,
+                observables=_obs("Z"),
+                param_shape=(1,),
+                param_basis_pairs=[((0,), "Z")],
+                noise_factors=NOISE_FACTORS,
+                extrapolator=["fallback"],
+                broadcast_obs_and_params=True,
+                meas_qubits=[0],
+            )
+
+    def test_raises_when_only_circuit_num_qubits_provided(self):
+        """Providing ``circuit_num_qubits`` without ``meas_qubits`` must raise ``ValueError``."""
+        item_results = [{"_meas": np.zeros((2, 1, 4, 1), dtype=bool)} for _ in LINEAR_ONES]
+        with self.assertRaises(ValueError):
+            GateFolding.compute_expectation_value_gate_folding(
+                item_results,
+                observables=_obs("Z"),
+                param_shape=(1,),
+                param_basis_pairs=[((0,), "Z")],
+                noise_factors=NOISE_FACTORS,
+                extrapolator=["fallback"],
+                broadcast_obs_and_params=True,
+                circuit_num_qubits=2,
+            )
+
     def test_measurement_flips_expanded_with_meas_qubits(self):
         """``measurement_flips._meas`` must be expanded when ``meas_qubits`` is provided.
 

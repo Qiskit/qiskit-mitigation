@@ -291,6 +291,22 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
         with self.assertRaises(ValueError):
             PEC.compute_expectation_value_pec(result, self._obs("ZZ"), gamma=1.0)
 
+    def test_raises_when_only_meas_qubits_provided(self):
+        """Providing ``meas_qubits`` without ``circuit_num_qubits`` must raise ``ValueError``."""
+        result = {"_meas": np.zeros((2, 1, 4, 1), dtype=bool), "pauli_signs": np.zeros((2, 1))}
+        with self.assertRaises(ValueError):
+            PEC.compute_expectation_value_pec(
+                result, self._obs("Z"), gamma=1.0, meas_qubits=[0]
+            )
+
+    def test_raises_when_only_circuit_num_qubits_provided(self):
+        """Providing ``circuit_num_qubits`` without ``meas_qubits`` must raise ``ValueError``."""
+        result = {"_meas": np.zeros((2, 1, 4, 1), dtype=bool), "pauli_signs": np.zeros((2, 1))}
+        with self.assertRaises(ValueError):
+            PEC.compute_expectation_value_pec(
+                result, self._obs("Z"), gamma=1.0, circuit_num_qubits=2
+            )
+
     def test_raises_broadcast_true_without_param_basis_pairs(self):
         """``broadcast_obs_and_params=True`` with ``param_basis_pairs=None`` must raise."""
         result = _fake_item_result(2, 1, 4, 2)

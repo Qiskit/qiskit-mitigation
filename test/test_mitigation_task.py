@@ -309,6 +309,18 @@ class TestComputeExpectationValue(unittest.TestCase):
         with self.assertRaises(ValueError):
             MitigationTask.compute_expectation_value(result, self._obs("ZZ"))
 
+    def test_raises_when_only_meas_qubits_provided(self):
+        """Providing ``meas_qubits`` without ``circuit_num_qubits`` must raise ``ValueError``."""
+        result = {"_meas": np.zeros((2, 1, 4, 1), dtype=bool)}
+        with self.assertRaises(ValueError, msg="Should raise when only one of the pair is given"):
+            MitigationTask.compute_expectation_value(result, self._obs("Z"), meas_qubits=[0])
+
+    def test_raises_when_only_circuit_num_qubits_provided(self):
+        """Providing ``circuit_num_qubits`` without ``meas_qubits`` must raise ``ValueError``."""
+        result = {"_meas": np.zeros((2, 1, 4, 1), dtype=bool)}
+        with self.assertRaises(ValueError):
+            MitigationTask.compute_expectation_value(result, self._obs("Z"), circuit_num_qubits=2)
+
     def test_raises_broadcast_true_without_param_basis_pairs(self):
         result = _fake_item_result(2, 1, 4, 2)
         with self.assertRaises(ValueError):
