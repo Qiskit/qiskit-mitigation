@@ -39,6 +39,7 @@ from qiskit_mitigation.utils.expectation_values import (
     _compute_single_term_exp_val_with_twirl_variance,
     executor_expectation_values,
 )
+from qiskit_mitigation.utils.meas_qubits import expand_meas_data_and_flips
 from qiskit_mitigation.utils.measurement_bases import (
     _convert_pauli_basis,
     _identify_measure_basis,
@@ -96,6 +97,7 @@ class PEC(MitigationTask):
         circuit: QuantumCircuit,
         boxing_options: dict | None,
         meas_qubits: Sequence[int] | None = None,
+        active_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -110,6 +112,8 @@ class PEC(MitigationTask):
             boxing_options: Dictionary of boxing options. If ``None``, default boxing options are used.
             meas_qubits: Circuit qubit indices to measure.  Forwarded to the base
                 implementation.  If ``None``, all qubits are measured.
+            active_qubits: Precomputed active qubits of ``circuit``. Forwarded to the base
+                implementation.
 
         Returns:
             The boxed circuit.
@@ -121,7 +125,6 @@ class PEC(MitigationTask):
                 ``boxing_options["inject_noise_targets"]`` not in ["gates", "all"],
                 ``boxing_options["inject_noise_strategy"]``is "no_modification".
             ValueError: If the boxing pass manager fails to run.
-        `
         """
         if boxing_options is None:
             boxing_options = {}
@@ -144,7 +147,7 @@ class PEC(MitigationTask):
                 'boxing_options["inject_noise_strategy"] may not be ``no_modification``.'
             )
 
-        return super()._box_circuit(circuit, edited_boxing_options, meas_qubits)
+        return super()._box_circuit(circuit, edited_boxing_options, meas_qubits, active_qubits)
 
     def prepare(
         self,
@@ -196,7 +199,9 @@ class PEC(MitigationTask):
             noise_maps: A mapping between layer ref to a noise model to use for PEC mitigation
                 method. The dict might contain layers not present in the given circuit, but must contain all
                 the mitigated layers. Assumes that the unique layers used for noise learning were extracted
-                using the ``find_unique_layers`` method with the same custom boxing options.
+                with the same custom boxing options, using either the ``find_unique_layers`` method (which
+                always measures all qubits) or :func:`~qiskit_mitigation.find_combined_unique_layers` with
+                the same ``meas_qubits``.
             scale_randomizations_by_gamma: Whether to automatically scale the number of randomizations by gamma**2.
             noise_gain: The fraction of noise to keep after the mitigation.
                 A value of ``0`` corresponds to removing the full learned noise.
@@ -223,7 +228,7 @@ class PEC(MitigationTask):
                     "projection operators. You can decompose into pauli operators if the "
                     "exponential cost is acceptable."
                 )
-            custom_boxing_options = trex._edit_boxing_options(self, custom_boxing_options)
+            custom_boxing_options = trex._edit_boxing_options(custom_boxing_options)
         # save variables in the class
         self._save_basic_variables(
             circuit,
@@ -239,7 +244,7 @@ class PEC(MitigationTask):
         )
 
         boxed_circuit = self._box_circuit(
-            self.circuit, self.custom_boxing_options, self.meas_qubits
+            self.circuit, self.custom_boxing_options, self.meas_qubits, self._active_qubits
         )
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex
@@ -357,6 +362,10 @@ class PEC(MitigationTask):
         }
 
         self._add_data_to_passthrough_data(data_for_passthrough, quantum_program)
+        # Register with TREX only once nothing can fail anymore, so that a failed ``prepare``
+        # does not leave this task behind in the TREX calibration.
+        if trex is not None:
+            trex._register_task(self)
         return quantum_program
 
     def postprocess(
@@ -637,11 +646,13 @@ class PEC(MitigationTask):
                 correspond to the ``i`` th slice of the data in ``item_result``.
             broadcast_obs_and_params: Whether to broadcast observables and parameter values.
             measure_noise_data: Measurement noise calibration data for TREX mitigation.
-            meas_qubits: The indices of qubits that were measured, when partial measurements are
-                used. If ``None``, full measurements are assumed.
-            circuit_num_qubits: The total number of qubits in the circuit, used together with
-                ``meas_qubits`` to expand partial measurement data back to full width. If ``None``,
+            meas_qubits: Sorted list of the circuit qubit indices that were measured, when partial
+                measurements are used. Must be given together with ``circuit_num_qubits``. If ``None``,
                 full measurements are assumed.
+            circuit_num_qubits: The total number of qubits in the circuit. Used together with
+                ``meas_qubits`` to expand the partial measurement data back to full width, so that the
+                qubit indices of the observables remain correct. Must be given together with
+                ``meas_qubits``. If ``None``, full measurements are assumed.
 
         Returns:
             A PubResult which contains ``evs`` and ``std`` as fields in its data, where ``evs`` are expectation values,
@@ -655,25 +666,21 @@ class PEC(MitigationTask):
             ValueError: If ``item_result`` has no ``'pauli_signs'`` key.
             ValueError: If ``param_shape`` and ``observables.shape`` cannot be broadcasted against
                 each other.
+            ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
         """
         try:
             data = item_result["_meas"].copy()
         except KeyError as ex:
             raise ValueError("Dedicated creg ``'_meas'`` is missing from the results.") from ex
 
-        # Expand compressed measurement data back to full-circuit width.
-        if meas_qubits is not None and circuit_num_qubits is not None:
-            data = MitigationTask._expand_meas_data(data, meas_qubits, circuit_num_qubits)
-        elif (meas_qubits is None) != (circuit_num_qubits is None):
-            raise ValueError(
-                "``meas_qubits`` and ``circuit_num_qubits`` must be provided together, "
-                "but only one was given."
-            )
-        meas_flips = item_result.get("measurement_flips._meas", None)
-        if meas_flips is not None and meas_qubits is not None and circuit_num_qubits is not None:
-            meas_flips = MitigationTask._expand_meas_data(
-                meas_flips, meas_qubits, circuit_num_qubits
-            )
+        # Expand compressed measurement data back to full-circuit width, so that all downstream
+        # postprocessing can use observable qubit indices without any remapping.
+        data, meas_flips = expand_meas_data_and_flips(
+            data,
+            item_result.get("measurement_flips._meas", None),
+            meas_qubits,
+            circuit_num_qubits,
+        )
 
         # extract pec_old signs if present
         pec_signs = item_result.get("pauli_signs", None)
@@ -681,7 +688,9 @@ class PEC(MitigationTask):
             raise ValueError("Results must contain ``'pauli_signs'`` in the data if PEC is used.")
 
         trex_scale_factors = (
-            TREX.trex_factors_each_term(measure_noise_data, observables)
+            TREX.trex_factors_each_term(
+                measure_noise_data, observables, meas_qubits, circuit_num_qubits
+            )
             if measure_noise_data is not None
             else None
         )

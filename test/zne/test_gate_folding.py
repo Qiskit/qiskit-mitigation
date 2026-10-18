@@ -1088,6 +1088,15 @@ class TestGateFoldingCreateInstanceFromPassthroughData(unittest.TestCase):
         self.assertEqual(gf.extrapolator, ["linear"])
         self.assertIsNone(gf.extrapolated_noise_factors)
 
+    def test_old_format_without_partial_measurement_keys_means_full_measurement(self):
+        """Results saved before ``meas_qubits`` existed have neither key and are full-width."""
+        passthrough = self._minimal_passthrough()
+        self.assertNotIn("meas_qubits", passthrough)
+        self.assertNotIn("circuit_num_qubits", passthrough)
+        gf = GateFolding.create_instance_from_passthrough_data(passthrough)
+        self.assertIsNone(gf.meas_qubits)
+        self.assertIsNone(gf.circuit_num_qubits)
+
     def test_raises_when_mitigation_missing_or_wrong(self):
         """Missing or non-'gate_folding' mitigation field must raise ValueError."""
         passthrough = self._minimal_passthrough()
@@ -1293,6 +1302,20 @@ class TestGateFoldingPartialSupport(unittest.TestCase):
                 meas_qubits=[0, 3],
             )
 
+    def test_failed_prepare_does_not_register_the_task_in_trex(self):
+        """A rejected ``meas_qubits`` leaves the TREX untouched, so retrying registers the task once."""
+        circuit = self._gate_circuit()
+        obs = [SparsePauliOp("ZIII")]
+        trex = TREX()
+        gf = GateFolding()
+        kwargs = {"noise_factors": (1, 3), "extrapolator": ["fallback"], "trex": trex}
+        with self.assertRaises(ValueError):
+            gf.prepare(circuit, obs, None, meas_qubits=[0, 3], **kwargs)
+        self.assertEqual(trex.tasks, [])
+
+        gf.prepare(circuit, obs, None, meas_qubits=[0, 1, 3], **kwargs)
+        self.assertEqual(trex.tasks, [gf])
+
     def test_failed_validation_leaves_no_program_item(self):
         """A rejected ``meas_qubits`` must not add items to a given quantum program."""
         program = QuantumProgram(shots=4)
@@ -1334,6 +1357,55 @@ class TestGateFoldingPartialSupport(unittest.TestCase):
         }
         gf = GateFolding.create_instance_from_passthrough_data(passthrough)
         self.assertEqual(gf.meas_qubits, [0])
+
+
+class TestGateFoldingParametrizedPartialMeasurement(unittest.TestCase):
+    """Parametrized circuits measured on a subset of the qubits, with and without broadcasting."""
+
+    def setUp(self):
+        theta = Parameter("theta")
+        self.circuit = QuantumCircuit(5)
+        self.circuit.rx(theta, 1)
+        self.circuit.cz(1, 3)
+        # Z on qubit 1 and Z on qubit 3
+        self.obs = [
+            SparsePauliOp.from_sparse_list([("Z", [1], 1.0)], num_qubits=5),
+            SparsePauliOp.from_sparse_list([("Z", [3], 1.0)], num_qubits=5),
+        ]
+
+    def _postprocess(self, parameters, broadcast_obs_and_params):
+        gf = GateFolding()
+        program = gf.prepare(
+            self.circuit,
+            self.obs,
+            parameters,
+            noise_factors=(1, 3),
+            extrapolator=["fallback"],
+            shots_per_randomization=4,
+            num_randomizations=2,
+            broadcast_obs_and_params=broadcast_obs_and_params,
+            meas_qubits=[1, 3],
+        )
+        # compressed column 0 is circuit qubit 1 (always 0), column 1 is circuit qubit 3 (always 1)
+        item_results = []
+        for item in program.items:
+            data = np.zeros((*item.shape, 4, 2), dtype=bool)
+            data[..., 1] = True
+            item_results.append({"_meas": data})
+        with warnings.catch_warnings():
+            # the synthetic data has no variance, which makes the extrapolation fall back
+            warnings.filterwarnings("ignore", message="No positive, finite standard errors")
+            return gf.postprocess(
+                item_results, noise_factors=[1.0, 3.0], extrapolator=["fallback"]
+            ).data.evs
+
+    def test_every_parameter_is_executed_for_each_observable(self):
+        evs = self._postprocess(np.array([[0.1], [0.2], [0.3]]), broadcast_obs_and_params=False)
+        np.testing.assert_allclose(evs, [[1.0, 1.0, 1.0], [-1.0, -1.0, -1.0]], atol=1e-10)
+
+    def test_broadcast_pairs_each_observable_with_its_parameter(self):
+        evs = self._postprocess(np.array([[0.1], [0.2]]), broadcast_obs_and_params=True)
+        np.testing.assert_allclose(evs, [1.0, -1.0], atol=1e-10)
 
 
 if __name__ == "__main__":

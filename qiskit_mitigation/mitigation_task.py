@@ -45,7 +45,11 @@ from qiskit_mitigation.utils.expectation_values import (
     _compute_single_term_exp_val_with_twirl_variance,
     executor_expectation_values,
 )
-from qiskit_mitigation.utils.meas_qubits import validate_meas_qubits
+from qiskit_mitigation.utils.meas_qubits import (
+    expand_meas_data_and_flips,
+    get_active_qubits,
+    validate_meas_qubits,
+)
 from qiskit_mitigation.utils.measurement_bases import (
     _convert_pauli_basis,
     _identify_measure_basis,
@@ -108,6 +112,7 @@ class MitigationTask:
         self.param_shape = None
         self.meas_bases: list[Pauli] | None = None
         self.meas_qubits: list[int] | None = None
+        self._active_qubits: list[int] | None = None
         self.circuit_num_qubits: int | None = None
         self.custom_boxing_options: dict = None
         self.shots_per_randomization: int = None
@@ -142,6 +147,7 @@ class MitigationTask:
         circuit: QuantumCircuit,
         boxing_options: dict | None,
         meas_qubits: Sequence[int] | None = None,
+        active_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -157,6 +163,8 @@ class MitigationTask:
                 If ``None``, default boxing options are used.
             meas_qubits: Circuit qubit indices to measure.  Only these qubits will have a classical
                 bit assigned in the ``_meas`` register.  If ``None``, all qubits are measured.
+            active_qubits: The qubits of ``circuit`` with non-trivial instructions, if they were already
+                computed, to avoid recomputing them when validating ``meas_qubits``.
 
         Returns:
             The boxed circuit.
@@ -187,7 +195,9 @@ class MitigationTask:
         if meas_qubits is None:
             qubits_to_measure = list(prepared_circuit.qubits)
         else:
-            meas_qubits = validate_meas_qubits(circuit, meas_qubits, edited_boxing_options)
+            meas_qubits = validate_meas_qubits(
+                circuit, meas_qubits, edited_boxing_options, active_qubits
+            )
             qubits_to_measure = [prepared_circuit.qubits[q] for q in meas_qubits]
 
         # Add final measurements only on the active qubits
@@ -557,10 +567,13 @@ class MitigationTask:
         self.num_randomizations = num_randomizations
         self.shots_per_randomization = shots_per_randomization
         self.trex = trex
+        self._active_qubits = get_active_qubits(circuit)
         if meas_qubits is None:
             self.meas_qubits = list(range(circuit.num_qubits))
         else:
-            self.meas_qubits = validate_meas_qubits(circuit, meas_qubits, custom_boxing_options)
+            self.meas_qubits = validate_meas_qubits(
+                circuit, meas_qubits, custom_boxing_options, self._active_qubits
+            )
             if unmeasured := sorted(
                 set(self._get_observable_qubit_indices(self.observables)) - set(self.meas_qubits)
             ):
@@ -701,7 +714,7 @@ class MitigationTask:
                     "projection operators. You can decompose into pauli operators if the "
                     "exponential cost is acceptable."
                 )
-            custom_boxing_options = trex._edit_boxing_options(self, custom_boxing_options)
+            custom_boxing_options = trex._edit_boxing_options(custom_boxing_options)
         # save variables in the class
         self._save_basic_variables(
             circuit,
@@ -717,7 +730,7 @@ class MitigationTask:
         )
 
         boxed_circuit = self._box_circuit(
-            self.circuit, self.custom_boxing_options, self.meas_qubits
+            self.circuit, self.custom_boxing_options, self.meas_qubits, self._active_qubits
         )
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex
@@ -772,6 +785,10 @@ class MitigationTask:
         }
 
         self._add_data_to_passthrough_data(data_for_passthrough, quantum_program)
+        # Register with TREX only once nothing can fail anymore, so that a failed ``prepare``
+        # does not leave this task behind in the TREX calibration.
+        if trex is not None:
+            trex._register_task(self)
         return quantum_program
 
     def postprocess(
@@ -971,32 +988,6 @@ class MitigationTask:
         return task
 
     @staticmethod
-    def _expand_meas_data(
-        data: np.ndarray,
-        meas_qubits: list[int],
-        circuit_num_qubits: int,
-    ) -> np.ndarray:
-        """Expand compressed measurement data to full-circuit width by padding unmeasured qubits with zeros.
-
-        The last axis of ``data`` contains one bit per measured qubit (in the order given by
-        ``meas_qubits``).  This function returns an array with last-axis length
-        ``circuit_num_qubits`` where column ``meas_qubits[i]`` holds the original column ``i``
-        and all other columns are zero.
-
-        Args:
-            data: Boolean array with last axis of length ``len(meas_qubits)``.
-            meas_qubits: Sorted list of circuit qubit indices that were measured.
-            circuit_num_qubits: Total number of qubits in the original circuit.
-
-        Returns:
-            Array of the same dtype and all leading dimensions, with last axis length
-            ``circuit_num_qubits``.
-        """
-        expanded = np.zeros((*data.shape[:-1], circuit_num_qubits), dtype=data.dtype)
-        expanded[..., meas_qubits] = data
-        return expanded
-
-    @staticmethod
     def compute_expectation_value(
         item_result: QuantumProgramItemResult,
         observables: ObservablesArray | Sequence[SparsePauliOp],
@@ -1021,11 +1012,13 @@ class MitigationTask:
                 correspond to the ``i`` th slice of the data in ``item_result``.
             broadcast_obs_and_params: Whether to broadcast observables and parameter values.
             measure_noise_data: Measurement noise calibration data for TREX mitigation.
-            meas_qubits: Sorted list of circuit qubit indices that were measured.  When provided
-                together with ``circuit_num_qubits``, the data is expanded back to full-circuit
-                width before postprocessing so that observable qubit indices remain correct.
-            circuit_num_qubits: Total number of qubits in the original circuit.  Required when
-                ``meas_qubits`` is provided.
+            meas_qubits: Sorted list of the circuit qubit indices that were measured, when partial
+                measurements are used. Must be given together with ``circuit_num_qubits``. If ``None``,
+                full measurements are assumed.
+            circuit_num_qubits: The total number of qubits in the circuit. Used together with
+                ``meas_qubits`` to expand the partial measurement data back to full width, so that the
+                qubit indices of the observables remain correct. Must be given together with
+                ``meas_qubits``. If ``None``, full measurements are assumed.
 
         Returns:
             A PubResult which contains ``evs`` and ``std`` as fields in its data, where ``evs`` are expectation values,
@@ -1038,29 +1031,26 @@ class MitigationTask:
             ValueError: If ``item_result['_meas']`` has invalid number of axes.
             ValueError: If ``param_shape`` and ``observables.shape`` cannot be broadcasted against
                 each other.
+            ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
         """
         try:
             data = item_result["_meas"].copy()
         except KeyError as ex:
             raise ValueError("Dedicated creg ``'_meas'`` is missing from the results.") from ex
 
-        # Expand compressed measurement data back to full-circuit width so that all downstream
+        # Expand compressed measurement data back to full-circuit width, so that all downstream
         # postprocessing can use observable qubit indices without any remapping.
-        if meas_qubits is not None and circuit_num_qubits is not None:
-            data = MitigationTask._expand_meas_data(data, meas_qubits, circuit_num_qubits)
-        elif (meas_qubits is None) != (circuit_num_qubits is None):
-            raise ValueError(
-                "``meas_qubits`` and ``circuit_num_qubits`` must be provided together, "
-                "but only one was given."
-            )
-        meas_flips = item_result.get("measurement_flips._meas", None)
-        if meas_flips is not None and meas_qubits is not None and circuit_num_qubits is not None:
-            meas_flips = MitigationTask._expand_meas_data(
-                meas_flips, meas_qubits, circuit_num_qubits
-            )
+        data, meas_flips = expand_meas_data_and_flips(
+            data,
+            item_result.get("measurement_flips._meas", None),
+            meas_qubits,
+            circuit_num_qubits,
+        )
 
         trex_scale_factors = (
-            TREX.trex_factors_each_term(measure_noise_data, observables)
+            TREX.trex_factors_each_term(
+                measure_noise_data, observables, meas_qubits, circuit_num_qubits
+            )
             if measure_noise_data is not None
             else None
         )

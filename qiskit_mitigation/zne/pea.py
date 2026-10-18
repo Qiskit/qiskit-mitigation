@@ -32,6 +32,7 @@ from samplomatic.quantum_program import (
 
 from qiskit_mitigation.mitigation_task import MitigationTask
 from qiskit_mitigation.trex import TREX
+from qiskit_mitigation.utils.meas_qubits import expand_meas_data_and_flips
 from qiskit_mitigation.zne.extrapolation import (
     ExtrapolatorType,
     _validate_noise_factors,
@@ -94,6 +95,7 @@ class PEA(MitigationTask):
         circuit: QuantumCircuit,
         boxing_options: dict | None,
         meas_qubits: Sequence[int] | None = None,
+        active_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -108,6 +110,8 @@ class PEA(MitigationTask):
             boxing_options: Dictionary of boxing options. If ``None``, default boxing options are used.
             meas_qubits: The indices of qubits that were measured, when partial measurements are
                 used. If ``None``, full measurements are assumed.
+            active_qubits: Precomputed active qubits of ``circuit``. Forwarded to the base
+                implementation.
 
         Returns:
             The boxed circuit.
@@ -141,7 +145,7 @@ class PEA(MitigationTask):
                 'boxing_options["inject_noise_strategy"] may not be ``no_modification``.'
             )
 
-        return super()._box_circuit(circuit, edited_boxing_options, meas_qubits)
+        return super()._box_circuit(circuit, edited_boxing_options, meas_qubits, active_qubits)
 
     def prepare(
         self,
@@ -194,7 +198,9 @@ class PEA(MitigationTask):
             noise_maps: A mapping between layer ref to a noise model to use for noise amplification.
                 The dict might contain layers not present in the given circuit, but must contain all
                 the mitigated layers. Assumes that the unique layers used for noise learning were extracted
-                using the ``find_unique_layers`` method with the same custom boxing options.
+                with the same custom boxing options, using either the ``find_unique_layers`` method (which
+                always measures all qubits) or :func:`~qiskit_mitigation.find_combined_unique_layers` with
+                the same ``meas_qubits``.
             noise_factors: The noise factors to use for amplifying the noise.
             extrapolator: The extrapolator model or models planned to be used in post-processing.
                 Used in preparation to validate that enough noise factors are present for a valid fit using these extrapolators.
@@ -225,7 +231,7 @@ class PEA(MitigationTask):
                     "projection operators. You can decompose into pauli operators if the "
                     "exponential cost is acceptable."
                 )
-            custom_boxing_options = trex._edit_boxing_options(self, custom_boxing_options)
+            custom_boxing_options = trex._edit_boxing_options(custom_boxing_options)
 
         # save variables in the class
         self._save_basic_variables(
@@ -252,7 +258,7 @@ class PEA(MitigationTask):
         )
 
         boxed_circuit = self._box_circuit(
-            self.circuit, self.custom_boxing_options, self.meas_qubits
+            self.circuit, self.custom_boxing_options, self.meas_qubits, self._active_qubits
         )
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex
@@ -330,6 +336,10 @@ class PEA(MitigationTask):
         }
 
         self._add_data_to_passthrough_data(data_for_passthrough, quantum_program)
+        # Register with TREX only once nothing can fail anymore, so that a failed ``prepare``
+        # does not leave this task behind in the TREX calibration.
+        if trex is not None:
+            trex._register_task(self)
         return quantum_program
 
     def postprocess(  # type: ignore[override]
@@ -525,11 +535,13 @@ class PEA(MitigationTask):
             broadcast_obs_and_params: Whether to broadcast observables and parameter values.
             measure_noise_data: Measurement noise calibration data for TREX mitigation. Can be either a
                 PauliLindbladMap of a noise model learned upfront, or a result of a calibration circuit.
-            meas_qubits: The indices of qubits that were measured, when partial measurements are
-                used. If ``None``, full measurements are assumed.
-            circuit_num_qubits: The total number of qubits in the circuit, used together with
-                ``meas_qubits`` to expand partial measurement data back to full width. If ``None``,
+            meas_qubits: Sorted list of the circuit qubit indices that were measured, when partial
+                measurements are used. Must be given together with ``circuit_num_qubits``. If ``None``,
                 full measurements are assumed.
+            circuit_num_qubits: The total number of qubits in the circuit. Used together with
+                ``meas_qubits`` to expand the partial measurement data back to full width, so that the
+                qubit indices of the observables remain correct. Must be given together with
+                ``meas_qubits``. If ``None``, full measurements are assumed.
             custom_fit: A custom fitting function that will be used for extrapolation. Should include a tuple in the form of:
                 ``(function, p_0, bounds)``. The function should take the independent variable as the first argument and
                 the parameters to fit as separate remaining arguments. p_0 is an array of the initial guess for the parameters,
@@ -557,6 +569,7 @@ class PEA(MitigationTask):
             ValueError: If ``item_result['_meas']`` has invalid number of axes.
             ValueError: If ``param_shape`` and ``observables.shape`` cannot be broadcasted against each other.
             ValueError: If ``noise_factors`` is under-specified for any extrapolator.
+            ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
         """
         try:
             data = item_result["_meas"].copy()
@@ -566,8 +579,12 @@ class PEA(MitigationTask):
             ) from ex
 
         # Expand compressed measurement data back to full-circuit width.
-        if meas_qubits is not None and circuit_num_qubits is not None:
-            data = MitigationTask._expand_meas_data(data, meas_qubits, circuit_num_qubits)
+        data, meas_flips = expand_meas_data_and_flips(
+            data,
+            item_result.get("measurement_flips._meas", None),
+            meas_qubits,
+            circuit_num_qubits,
+        )
 
         _validate_noise_factors(noise_factors, extrapolator)
 
@@ -593,7 +610,9 @@ class PEA(MitigationTask):
         )
 
         trex_scale_factors = (
-            TREX.trex_factors_each_term(measure_noise_data, observables)
+            TREX.trex_factors_each_term(
+                measure_noise_data, observables, meas_qubits, circuit_num_qubits
+            )
             if measure_noise_data is not None
             else None
         )
@@ -633,13 +652,8 @@ class PEA(MitigationTask):
                     observables_arr, param_shape, broadcast_shape, meas_bases
                 )
 
-        # Apply measurement flips if present, expanding them if data was already expanded
-        meas_flips = item_result.get("measurement_flips._meas", None)
+        # Apply measurement flips if present
         if meas_flips is not None:
-            if meas_qubits is not None and circuit_num_qubits is not None:
-                meas_flips = MitigationTask._expand_meas_data(
-                    meas_flips, meas_qubits, circuit_num_qubits
-                )
             data ^= meas_flips
 
         (

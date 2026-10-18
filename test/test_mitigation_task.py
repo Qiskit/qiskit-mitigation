@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit import CircuitInstruction, ClassicalRegister, Instruction, Parameter
-from qiskit.primitives import PubResult
+from qiskit.primitives import PubResult, StatevectorSampler
 from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliList, SparsePauliOp
@@ -1109,6 +1109,30 @@ class TestMitigationTaskPostprocess(unittest.TestCase):
         pub_result = task.postprocess(item_result)
         self.assertIsInstance(pub_result, PubResult)
 
+    def test_postprocess_of_old_format_passthrough_uses_full_width_data(self):
+        """A result whose passthrough lacks the partial measurement keys is postprocessed at full width."""
+        circuit = QuantumCircuit(3)
+        circuit.sx(0)
+        circuit.sx(2)
+        task = MitigationTask()
+        program = task.prepare(
+            circuit,
+            [SparsePauliOp("ZII"), SparsePauliOp("IIZ")],
+            None,
+            shots_per_randomization=4,
+            num_randomizations=1,
+        )
+        old_format_passthrough = dict(program.passthrough_data["qiskit_mitigation"][0])
+        del old_format_passthrough["meas_qubits"]
+        del old_format_passthrough["circuit_num_qubits"]
+        loaded_task = MitigationTask.create_instance_from_passthrough_data(old_format_passthrough)
+
+        # Qubit 2 is always 1 and qubit 0 is always 0, so <Z_2> = -1 and <Z_0> = +1.
+        data = np.zeros((1, 1, 4, 3), dtype=bool)
+        data[..., 2] = True
+        evs = loaded_task.postprocess({"_meas": data}).data.evs
+        np.testing.assert_allclose(evs, [-1.0, 1.0])
+
     def test_postprocess_unsupported_version_raises(self):
         """``postprocess`` must raise ValueError when task VERSION is unsupported."""
         task = self._prepared_task()
@@ -1151,6 +1175,15 @@ class TestCreateInstanceFromPassthroughData(unittest.TestCase):
         passthrough = self._minimal_passthrough(program_item_index=7)
         task = MitigationTask.create_instance_from_passthrough_data(passthrough)
         self.assertEqual(task._program_item_index, 7)
+
+    def test_old_format_without_partial_measurement_keys_means_full_measurement(self):
+        """Results saved before ``meas_qubits`` existed have neither key and are full-width."""
+        passthrough = self._minimal_passthrough()
+        self.assertNotIn("meas_qubits", passthrough)
+        self.assertNotIn("circuit_num_qubits", passthrough)
+        task = MitigationTask.create_instance_from_passthrough_data(passthrough)
+        self.assertIsNone(task.meas_qubits)
+        self.assertIsNone(task.circuit_num_qubits)
 
     def test_raises_when_version_missing(self):
         """Missing 'version' must raise ValueError."""
@@ -1473,6 +1506,17 @@ class TestPrepareMeasQubitsValidation(unittest.TestCase):
         calibration = program.items[-1]
         self.assertEqual(len(next(cr for cr in calibration.circuit.cregs if cr.name == "_meas")), 4)
 
+    def test_failed_prepare_does_not_register_the_task_in_trex(self):
+        """A rejected ``meas_qubits`` leaves the TREX untouched, so retrying registers the task once."""
+        trex = TREX()
+        task = MitigationTask()
+        with self.assertRaises(ValueError):
+            task.prepare(self.circuit, self.obs, parameters=None, trex=trex, meas_qubits=[0, 1, 2])
+        self.assertEqual(trex.tasks, [])
+
+        task.prepare(self.circuit, self.obs, parameters=None, trex=trex, meas_qubits=[0, 1, 2, 4])
+        self.assertEqual(trex.tasks, [task])
+
     def test_round_trip_through_load_tasks_from_result(self):
         """A task restored from the result postprocesses data of a partial measurement."""
         task = MitigationTask()
@@ -1494,30 +1538,120 @@ class TestPrepareMeasQubitsValidation(unittest.TestCase):
         np.testing.assert_allclose(restored.postprocess(result).data.evs, [-1.0], atol=1e-10)
 
 
-class TestExpandMeasData(unittest.TestCase):
-    """Tests for MitigationTask._expand_meas_data."""
+class TestSampledPartialMeasurementBases(unittest.TestCase):
+    """Simulate the prepared item and check that each basis change lands on the right qubit.
 
-    def test_correct_columns_placed(self):
-        """Measured columns should end up at the right positions in the expanded array."""
-        meas_qubits = [1, 3]
-        data = np.array([[[True, False]]], dtype=bool)  # shape (1, 1, 2)
-        expanded = MitigationTask._expand_meas_data(data, meas_qubits, circuit_num_qubits=5)
-        self.assertEqual(expanded.shape, (1, 1, 5))
-        self.assertTrue(expanded[0, 0, 1])  # meas_qubits[0]=1 → col 1
-        self.assertFalse(expanded[0, 0, 3])  # meas_qubits[1]=3 → col 3 (False)
-        # Unmeasured columns are zero
-        for q in [0, 2, 4]:
-            self.assertFalse(expanded[0, 0, q])
+    Every qubit is prepared in a different eigenstate, so measuring any qubit in the wrong basis
+    (for example after a mix-up of the compressed and the circuit qubit indices) changes the result.
+    """
 
-    def test_multidim_shapes(self):
-        """Expansion works for 4-D and 5-D arrays (standard data shapes)."""
-        meas_qubits = [0, 2]
-        for shape_prefix in [(2, 3, 4), (2, 3, 2, 4)]:
-            data = np.ones((*shape_prefix, 2), dtype=bool)
-            expanded = MitigationTask._expand_meas_data(data, meas_qubits, circuit_num_qubits=4)
-            self.assertEqual(expanded.shape, (*shape_prefix, 4))
-            np.testing.assert_array_equal(expanded[..., meas_qubits], data)
-            np.testing.assert_array_equal(expanded[..., [1, 3]], False)
+    SHOTS = 50
+    RANDOMIZATIONS = 2
+
+    @classmethod
+    def _expectation_values(cls, circuit, observable, meas_qubits):
+        task = MitigationTask()
+        program = task.prepare(
+            circuit,
+            [SparsePauliOp(observable)],
+            None,
+            shots_per_randomization=cls.SHOTS,
+            num_randomizations=cls.RANDOMIZATIONS,
+            meas_qubits=meas_qubits,
+        )
+        item = program.items[0]
+        (basis_key,) = [key for key in item.samplex_arguments if key.startswith("basis_changes.")]
+        all_bases = item.samplex_arguments[basis_key]  # one row per measurement basis
+        data = np.zeros(
+            (cls.RANDOMIZATIONS, len(all_bases), cls.SHOTS, len(task.meas_qubits)), dtype=bool
+        )
+        for basis_index, bases in enumerate(all_bases):
+            outputs = item.samplex.sample({basis_key: bases}, num_randomizations=cls.RANDOMIZATIONS)
+            for randomization in range(cls.RANDOMIZATIONS):
+                bound = item.circuit.assign_parameters(outputs["parameter_values"][randomization])
+                bitstrings = (
+                    StatevectorSampler()
+                    .run([bound], shots=cls.SHOTS)
+                    .result()[0]
+                    .data["_meas"]
+                    .get_bitstrings()
+                )
+                # bitstrings are little-endian: the last character is the first register bit
+                data[randomization, basis_index] = [[c == "1" for c in b[::-1]] for b in bitstrings]
+        return task.postprocess({"_meas": data}).data.evs
+
+    @staticmethod
+    def _eigenstate_circuit():
+        """q0 = |1> (Z=-1), q1 = |-> (X=-1), q2 idle (Z=+1), q3 = |+> (X=+1)."""
+        circuit = QuantumCircuit(4)
+        circuit.x(0)
+        circuit.x(1)
+        circuit.h(1)
+        circuit.h(3)
+        return circuit
+
+    def test_each_qubit_is_measured_in_its_own_basis(self):
+        # Pauli labels are little-endian: the last character is qubit 0
+        cases = [
+            # (observable, meas_qubits, expected value)
+            ("IIIZ", [0, 1, 3], -1.0),
+            ("IIXI", [0, 1, 3], -1.0),
+            ("XIII", [0, 1, 3], 1.0),
+            ("XIXZ", [0, 1, 3], 1.0),  # product of the three eigenvalues
+            ("XIXZ", [0, 1, 2, 3], 1.0),
+            ("XZXZ", [0, 1, 2, 3], 1.0),  # Z on the idle qubit 2 as well
+            ("XZII", [0, 1, 2, 3], 1.0),
+            ("IZXZ", [1, 2, 3, 0], 1.0),  # unsorted input is normalized
+        ]
+        circuit = self._eigenstate_circuit()
+        for observable, meas_qubits, expected in cases:
+            with self.subTest(observable=observable, meas_qubits=meas_qubits):
+                evs = self._expectation_values(circuit, observable, meas_qubits)
+                np.testing.assert_allclose(evs, [expected], atol=1e-9)
+
+    def test_non_contiguous_meas_qubits(self):
+        """With idle qubits 1 and 2 left out, the compressed columns are circuit qubits 0 and 3."""
+        circuit = QuantumCircuit(4)
+        circuit.x(0)
+        circuit.h(3)
+        for observable, expected in [("IIIZ", -1.0), ("XIII", 1.0), ("XIIZ", -1.0)]:
+            with self.subTest(observable=observable):
+                evs = self._expectation_values(circuit, observable, [0, 3])
+                np.testing.assert_allclose(evs, [expected], atol=1e-9)
+
+
+class TestPostprocessTrexCalibrationArrayPartialMeasurement(unittest.TestCase):
+    """``postprocess`` with a TREX calibration result array and partial ``meas_qubits``."""
+
+    @staticmethod
+    def _calibration_data() -> np.ndarray:
+        """Calibration of qubits 1 and 2: qubit 1 never flips, qubit 2 flips in 10% of the shots."""
+        cal_data = np.zeros((10, 100, 2), dtype=bool)
+        for randomization in range(10):
+            cal_data[randomization, randomization * 10 : (randomization + 1) * 10, 1] = True
+        return cal_data
+
+    def _postprocess(self, observable: str) -> np.ndarray:
+        circuit = QuantumCircuit(3)
+        circuit.sx(1)
+        circuit.sx(2)
+        task = MitigationTask()
+        task.prepare(
+            circuit,
+            [SparsePauliOp(observable)],
+            None,
+            shots_per_randomization=10,
+            num_randomizations=1,
+            meas_qubits=[1, 2],
+        )
+        item_result = {"_meas": np.zeros((1, 1, 10, 2), dtype=bool)}
+        return task.postprocess(item_result, measure_noise_data=self._calibration_data()).data.evs
+
+    def test_observable_on_a_noiseless_qubit_is_not_rescaled(self):
+        np.testing.assert_allclose(self._postprocess("IZI"), [1.0])
+
+    def test_observable_on_a_noisy_qubit_is_rescaled_by_its_own_column(self):
+        np.testing.assert_allclose(self._postprocess("ZII"), [1 / (1 - 2 * 0.1)])
 
 
 class TestPrepareTargetedMeasurement(unittest.TestCase):
@@ -1700,6 +1834,45 @@ class TestPrepareTargetedMeasurement(unittest.TestCase):
             {"_meas": data_compressed, "measurement_flips._meas": flips_compressed}
         )
         np.testing.assert_allclose(pub.data.evs, [-1.0], atol=1e-10)
+
+
+class TestParametrizedPartialMeasurement(unittest.TestCase):
+    """Parametrized circuits measured on a subset of the qubits, with and without broadcasting."""
+
+    def setUp(self):
+        theta = Parameter("theta")
+        self.circuit = QuantumCircuit(5)
+        self.circuit.rx(theta, 1)
+        self.circuit.sx(3)
+        # Z on qubit 1 and Z on qubit 3
+        self.obs = [
+            SparsePauliOp.from_sparse_list([("Z", [1], 1.0)], num_qubits=5),
+            SparsePauliOp.from_sparse_list([("Z", [3], 1.0)], num_qubits=5),
+        ]
+
+    def _postprocess(self, parameters, broadcast_obs_and_params):
+        task = MitigationTask()
+        program = task.prepare(
+            self.circuit,
+            self.obs,
+            parameters,
+            shots_per_randomization=4,
+            num_randomizations=2,
+            broadcast_obs_and_params=broadcast_obs_and_params,
+            meas_qubits=[1, 3],
+        )
+        # compressed column 0 is circuit qubit 1 (always 0), column 1 is circuit qubit 3 (always 1)
+        data = np.zeros((*program.items[0].shape, 4, 2), dtype=bool)
+        data[..., 1] = True
+        return task.postprocess({"_meas": data}).data.evs
+
+    def test_every_parameter_is_executed_for_each_observable(self):
+        evs = self._postprocess(np.array([[0.1], [0.2], [0.3]]), broadcast_obs_and_params=False)
+        np.testing.assert_allclose(evs, [[1.0, 1.0, 1.0], [-1.0, -1.0, -1.0]], atol=1e-10)
+
+    def test_broadcast_pairs_each_observable_with_its_parameter(self):
+        evs = self._postprocess(np.array([[0.1], [0.2]]), broadcast_obs_and_params=True)
+        np.testing.assert_allclose(evs, [1.0, -1.0], atol=1e-10)
 
 
 if __name__ == "__main__":

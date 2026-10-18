@@ -15,14 +15,22 @@
 from __future__ import annotations
 
 import unittest
+import warnings
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 from qiskit.circuit import QuantumCircuit
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, QubitSparsePauli, SparsePauliOp
+from qiskit_mitigation.mitigation_task import MitigationTask
+from qiskit_mitigation.pec import PEC
 from qiskit_mitigation.trex import TREX
-from samplomatic.quantum_program import QuantumProgram, SamplexItem
+from qiskit_mitigation.utils.utils import find_combined_unique_layers, load_tasks_from_result
+from qiskit_mitigation.zne.pea import PEA
+from samplomatic import InjectNoise
+from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult, SamplexItem
+from samplomatic.utils import get_annotation
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -105,54 +113,62 @@ class TestEditBoxingOptions(unittest.TestCase):
         self.trex = TREX()
         self.task = _mock_mitigation_task()
 
-    def test_task_appended_to_tasks(self):
-        """Calling ``_edit_boxing_options`` must append the task to ``self.tasks``."""
-        self.trex._edit_boxing_options(self.task, None)
-        self.assertIn(self.task, self.trex.tasks)
+    def test_task_is_not_registered(self):
+        """Editing the boxing options must not register a task, registration is a separate step."""
+        self.trex._edit_boxing_options(None)
+        self.assertEqual(self.trex.tasks, [])
 
     def test_none_options_returns_defaults(self):
         """``None`` boxing_options must return default TREX options."""
-        result = self.trex._edit_boxing_options(self.task, None)
+        result = self.trex._edit_boxing_options(None)
         self.assertEqual(result, {"enable_measures": True, "measure_annotations": "all"})
 
     def test_missing_enable_measures_is_injected(self):
         """When ``enable_measures`` is absent, it is injected as ``True``."""
         options = {"some_key": "some_value"}
-        result = self.trex._edit_boxing_options(self.task, options)
+        result = self.trex._edit_boxing_options(options)
         self.assertTrue(result["enable_measures"])
 
     def test_missing_enable_measures_sets_measure_annotations_to_all(self):
         """When ``enable_measures`` is absent, ``measure_annotations`` is set to ``'all'``."""
         options = {}
-        result = self.trex._edit_boxing_options(self.task, options)
+        result = self.trex._edit_boxing_options(options)
         self.assertEqual(result["measure_annotations"], "all")
 
     def test_raises_when_enable_measures_is_false(self):
         """A ``False`` value for ``enable_measures`` must raise ``ValueError``."""
         with self.assertRaises(ValueError):
-            self.trex._edit_boxing_options(self.task, {"enable_measures": False})
+            self.trex._edit_boxing_options({"enable_measures": False})
 
     def test_measure_annotations_overridden_to_all(self):
         """Any non-``'all'`` value for ``measure_annotations`` is replaced with ``'all'``."""
         options = {"enable_measures": True, "measure_annotations": "change_basis"}
-        result = self.trex._edit_boxing_options(self.task, options)
+        result = self.trex._edit_boxing_options(options)
         self.assertEqual(result["measure_annotations"], "all")
 
     def test_valid_options_returned_unchanged(self):
         """Options already containing the correct values are returned as-is."""
         options = {"enable_measures": True, "measure_annotations": "all"}
-        result = self.trex._edit_boxing_options(self.task, options)
+        result = self.trex._edit_boxing_options(options)
         self.assertTrue(result["enable_measures"])
         self.assertEqual(result["measure_annotations"], "all")
 
+
+class TestRegisterTask(unittest.TestCase):
+    """Tests for :meth:`TREX._register_task`."""
+
+    def test_task_appended_to_tasks(self):
+        trex = TREX()
+        task = _mock_mitigation_task()
+        trex._register_task(task)
+        self.assertEqual(trex.tasks, [task])
+
     def test_multiple_tasks_accumulated(self):
-        """Calling ``_edit_boxing_options`` multiple times appends all tasks."""
-        task2 = _mock_mitigation_task()
-        self.trex._edit_boxing_options(self.task, None)
-        self.trex._edit_boxing_options(task2, None)
-        self.assertEqual(len(self.trex.tasks), 2)
-        self.assertIn(self.task, self.trex.tasks)
-        self.assertIn(task2, self.trex.tasks)
+        trex = TREX()
+        task1, task2 = _mock_mitigation_task(), _mock_mitigation_task()
+        trex._register_task(task1)
+        trex._register_task(task2)
+        self.assertEqual(trex.tasks, [task1, task2])
 
 
 # ---------------------------------------------------------------------------
@@ -644,6 +660,99 @@ class TestTrexFactorsEachTerm(unittest.TestCase):
         self.assertEqual(sorted(from_sequence), ["IZ", "ZI"])
 
 
+class TestTrexFactorsEachTermPartialMeasurement(unittest.TestCase):
+    """Tests for :meth:`TREX.trex_factors_each_term` with calibration arrays of partial measurements."""
+
+    @staticmethod
+    def _compressed_calibration_data() -> np.ndarray:
+        """Calibration data of a 3-qubit circuit that measured qubits 1 and 2 only.
+
+        Column 0 is qubit 1 and flips in 10% of the shots, column 1 is qubit 2 and flips in 20% of the shots.
+        """
+        cal_data = np.zeros((10, 100, 2), dtype=bool)
+        cal_data[:, :10, 0] = True
+        cal_data[:, :20, 1] = True
+        return cal_data
+
+    def test_factors_match_the_full_width_calibration_data(self):
+        """Compressed calibration data gives the same factors as the equivalent full-width data."""
+        compressed = self._compressed_calibration_data()
+        full_width = np.zeros((10, 100, 3), dtype=bool)
+        full_width[..., [1, 2]] = compressed
+        observables = [SparsePauliOp("IZI"), SparsePauliOp("ZII"), SparsePauliOp("ZZI")]
+
+        result = TREX.trex_factors_each_term(
+            compressed, observables, meas_qubits=[1, 2], circuit_num_qubits=3
+        )
+
+        self.assertEqual(result, TREX.trex_factors_each_term(full_width, observables))
+
+    def test_factor_is_read_from_the_column_of_the_circuit_qubit(self):
+        """A term on qubit 1 reads qubit 1's column (10% flips), not the column at index 1."""
+        result = TREX.trex_factors_each_term(
+            self._compressed_calibration_data(),
+            [SparsePauliOp("IZI"), SparsePauliOp("ZII")],
+            meas_qubits=[1, 2],
+            circuit_num_qubits=3,
+        )
+
+        self.assertAlmostEqual(result["IZI"], 1 / (1 - 2 * 0.1))
+        self.assertAlmostEqual(result["ZII"], 1 / (1 - 2 * 0.2))
+
+    def test_without_meas_qubits_the_array_is_used_as_is(self):
+        """Without ``meas_qubits`` the columns are taken as circuit qubits, as before."""
+        result = TREX.trex_factors_each_term(
+            self._compressed_calibration_data(), [SparsePauliOp("IZ"), SparsePauliOp("ZI")]
+        )
+
+        self.assertAlmostEqual(result["IZ"], 1 / (1 - 2 * 0.1))
+        self.assertAlmostEqual(result["ZI"], 1 / (1 - 2 * 0.2))
+
+    def test_raises_when_a_term_acts_on_an_unmeasured_qubit(self):
+        """A term on a qubit that is missing from the calibration data raises."""
+        with self.assertRaisesRegex(ValueError, r"qubits \[0\].*not in ``meas_qubits``"):
+            TREX.trex_factors_each_term(
+                self._compressed_calibration_data(),
+                [SparsePauliOp("IIZ")],
+                meas_qubits=[1, 2],
+                circuit_num_qubits=3,
+            )
+
+    def test_unmeasured_qubits_outside_the_observable_support_are_allowed(self):
+        """Terms that do not touch the unmeasured qubits are fine."""
+        result = TREX.trex_factors_each_term(
+            self._compressed_calibration_data(),
+            [SparsePauliOp("ZZI")],
+            meas_qubits=[1, 2],
+            circuit_num_qubits=3,
+        )
+
+        self.assertIn("ZZI", result)
+
+    def test_raises_when_only_meas_qubits_is_given(self):
+        with self.assertRaisesRegex(ValueError, "must be provided together"):
+            TREX.trex_factors_each_term(
+                self._compressed_calibration_data(), [SparsePauliOp("IZI")], meas_qubits=[1, 2]
+            )
+
+    def test_raises_when_only_circuit_num_qubits_is_given(self):
+        with self.assertRaisesRegex(ValueError, "must be provided together"):
+            TREX.trex_factors_each_term(
+                self._compressed_calibration_data(), [SparsePauliOp("IZI")], circuit_num_qubits=3
+            )
+
+    def test_noise_map_is_not_expanded(self):
+        """A ``PauliLindbladMap`` is indexed by circuit qubits and ignores ``meas_qubits``."""
+        noise = PauliLindbladMap.from_sparse_list([("X", [2], 0.05)], num_qubits=3)
+        observables = [SparsePauliOp("ZII")]
+
+        with_meas_qubits = TREX.trex_factors_each_term(
+            noise, observables, meas_qubits=[1, 2], circuit_num_qubits=3
+        )
+
+        self.assertEqual(with_meas_qubits, TREX.trex_factors_each_term(noise, observables))
+
+
 # ---------------------------------------------------------------------------
 # TREX._add_data_to_passthrough_data  (static method)
 # ---------------------------------------------------------------------------
@@ -845,6 +954,15 @@ class TestTREXCreateInstanceFromPassthroughData(unittest.TestCase):
         )
         self.assertEqual(trex._program_item_index, 7)
 
+    def test_old_format_without_partial_measurement_keys_means_full_measurement(self):
+        """Results saved before ``meas_qubits`` existed have neither key and are full-width."""
+        passthrough = self._minimal_passthrough()
+        self.assertNotIn("meas_qubits", passthrough)
+        self.assertNotIn("circuit_num_qubits", passthrough)
+        trex = TREX.create_instance_from_passthrough_data(passthrough)
+        self.assertIsNone(trex.meas_qubits)
+        self.assertIsNone(trex.circuit_num_qubits)
+
     def test_raises_when_version_key_missing(self):
         """Missing ``'version'`` key must raise ``ValueError``."""
         passthrough = self._minimal_passthrough()
@@ -983,6 +1101,141 @@ class TestComputeNoiseModelPartialQubits(unittest.TestCase):
         restored_trex = TREX.create_instance_from_passthrough_data(passthrough)
         self.assertEqual(restored_trex.meas_qubits, [1, 3])
         self.assertEqual(restored_trex.circuit_num_qubits, 5)
+
+
+class TestTrexEndToEndWithPartialMeasurement(unittest.TestCase):
+    """Prepare, build a result and postprocess with TREX when the tasks measure only some qubits.
+
+    Every qubit gets its own calibration flip rate, so reading the wrong calibration column
+    (for example because of a mix-up of the compressed and the circuit qubit indices) changes the
+    result. The data of the tasks themselves is all zeros, so the expectation value of an observable is
+    exactly its TREX factor, ``exp(2 * sum of the flip rates of the qubits of the term)``.
+    """
+
+    SHOTS = 10
+    RANDOMIZATIONS = 2
+    FLIP_RATES: ClassVar[dict[int, float]] = {0: 0.0, 1: 0.1, 2: 0.2, 4: 0.3}
+
+    def _result(self, program, trex, with_pauli_signs=False):
+        """Return the result of the program with all-zero data and the calibration of FLIP_RATES."""
+        calibration = np.zeros((self.RANDOMIZATIONS, self.SHOTS, len(trex.meas_qubits)), dtype=bool)
+        for column, qubit in enumerate(trex.meas_qubits):
+            calibration[:, : round(self.FLIP_RATES[qubit] * self.SHOTS), column] = True
+        item_results = []
+        for item in program.items[:-1]:
+            data = np.zeros((*item.shape, self.SHOTS, len(item.circuit.cregs[-1])), dtype=bool)
+            item_result = {"_meas": data, "measurement_flips._meas": np.zeros_like(data)}
+            if with_pauli_signs:
+                item_result["pauli_signs"] = np.zeros((*item.shape, 1), dtype=bool)
+            item_results.append(item_result)
+        item_results.append(
+            {"_meas": calibration, "measurement_flips._meas": np.zeros_like(calibration)}
+        )
+        return QuantumProgramResult(item_results, passthrough_data=program.passthrough_data)
+
+    @staticmethod
+    def _noise_maps(task, circuit, meas_qubits):
+        layers = find_combined_unique_layers(
+            [circuit], mitigation_types=[task], meas_qubits=meas_qubits, box_types="gates"
+        )
+        return {
+            get_annotation(layer.operation, InjectNoise).ref: PauliLindbladMap.identity(
+                len(layer.qubits)
+            )
+            for layer in layers
+        }
+
+    def test_tasks_of_different_widths_read_their_own_calibration_columns(self):
+        """A 3-qubit and a 5-qubit task share one calibration measuring the union of their qubits."""
+        narrow = QuantumCircuit(3)
+        narrow.sx(0)
+        narrow.sx(2)
+        wide = QuantumCircuit(5)
+        wide.sx(1)
+        wide.sx(4)
+        trex = TREX()
+        program = MitigationTask().prepare(
+            narrow,
+            [SparsePauliOp("ZIZ")],
+            None,
+            shots_per_randomization=self.SHOTS,
+            num_randomizations=self.RANDOMIZATIONS,
+            trex=trex,
+            meas_qubits=[0, 2],
+        )
+        program = MitigationTask().prepare(
+            wide,
+            [SparsePauliOp("ZIIZI")],
+            None,
+            shots_per_randomization=self.SHOTS,
+            num_randomizations=self.RANDOMIZATIONS,
+            trex=trex,
+            meas_qubits=[1, 4],
+            quantum_program=program,
+        )
+        trex.prepare(self.RANDOMIZATIONS, program)
+        self.assertEqual(trex.meas_qubits, [0, 1, 2, 4])
+        self.assertEqual(trex.circuit_num_qubits, 5)
+
+        result = self._result(program, trex)
+        narrow_task, wide_task = load_tasks_from_result(result)
+        # the calibration columns are the union [0, 1, 2, 4]; each task must pick its own qubits
+        np.testing.assert_allclose(
+            narrow_task.postprocess(result).data.evs, [np.exp(2 * (0.0 + 0.2))]
+        )
+        np.testing.assert_allclose(
+            wide_task.postprocess(result).data.evs, [np.exp(2 * (0.1 + 0.3))]
+        )
+
+    def test_pec_with_trex_and_partial_measurement(self):
+        circuit = QuantumCircuit(5)
+        circuit.sx(1)
+        circuit.cz(1, 4)
+        trex = TREX()
+        pec = PEC()
+        program = pec.prepare(
+            circuit,
+            [SparsePauliOp("ZIIZI")],
+            None,
+            noise_maps=self._noise_maps(pec, circuit, [1, 4]),
+            shots_per_randomization=self.SHOTS,
+            num_randomizations=self.RANDOMIZATIONS,
+            scale_randomizations_by_gamma=False,
+            trex=trex,
+            meas_qubits=[1, 4],
+        )
+        trex.prepare(self.RANDOMIZATIONS, program)
+
+        result = self._result(program, trex, with_pauli_signs=True)
+        (restored,) = load_tasks_from_result(result)
+        np.testing.assert_allclose(restored.postprocess(result).data.evs, [np.exp(2 * (0.1 + 0.3))])
+
+    def test_pea_with_trex_and_partial_measurement(self):
+        circuit = QuantumCircuit(5)
+        circuit.sx(1)
+        circuit.cz(1, 4)
+        trex = TREX()
+        pea = PEA()
+        program = pea.prepare(
+            circuit,
+            [SparsePauliOp("ZIIZI")],
+            None,
+            noise_maps=self._noise_maps(pea, circuit, [1, 4]),
+            noise_factors=[1, 3],
+            shots_per_randomization=self.SHOTS,
+            num_randomizations=self.RANDOMIZATIONS,
+            trex=trex,
+            meas_qubits=[1, 4],
+        )
+        trex.prepare(self.RANDOMIZATIONS, program)
+
+        result = self._result(program, trex, with_pauli_signs=True)
+        (restored,) = load_tasks_from_result(result)
+        with warnings.catch_warnings():
+            # the synthetic data has no variance, which makes the extrapolation fall back
+            warnings.filterwarnings("ignore", message="No positive, finite standard errors")
+            evs = restored.postprocess(result, extrapolator=["fallback"]).data.evs
+        np.testing.assert_allclose(evs, [np.exp(2 * (0.1 + 0.3))])
 
 
 if __name__ == "__main__":

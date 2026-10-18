@@ -34,6 +34,8 @@ from samplomatic import build
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult, SamplexItem
 from samplomatic.transpiler import generate_boxing_pass_manager
 
+from qiskit_mitigation.utils.meas_qubits import expand_meas_data
+
 
 class TREX:
     """Mitigates readout errors in expectation values using the Twirled Readout Error eXtinction (TREX) method.
@@ -56,12 +58,12 @@ class TREX:
         self.meas_qubits: list[int] | None = None
         self.circuit_num_qubits: int | None = None
 
-    def _edit_boxing_options(
-        self, mitigation_task: MitigationTask, boxing_options: dict | None
-    ) -> dict:
-        """Edit boxing options."""
+    def _register_task(self, mitigation_task: MitigationTask) -> None:
+        """Connect a mitigation task to this TREX, so that its qubits are included in the calibration."""
         self.tasks.append(mitigation_task)
 
+    def _edit_boxing_options(self, boxing_options: dict | None) -> dict:
+        """Edit boxing options."""
         if boxing_options is None:
             return {"enable_measures": True, "measure_annotations": "all"}
         edited_boxing_options = boxing_options.copy()
@@ -372,8 +374,10 @@ class TREX:
 
     @staticmethod
     def trex_factors_each_term(
-        measurement_noise_map: PauliLindbladMap,
+        measurement_noise_map: PauliLindbladMap | np.ndarray,
         observables: ObservablesArray | Sequence[SparsePauliOp],
+        meas_qubits: Sequence[int] | None = None,
+        circuit_num_qubits: int | None = None,
     ) -> dict[str, float]:
         r"""Calculates TREX mitigation algorithm's expectation value scale factor for each Pauli term in each observable.
 
@@ -381,22 +385,53 @@ class TREX:
         measurement noise, where :math:`N` are the non-identity indices in the term.
 
         Args:
-            measurement_noise_map: Learned measurement noise in PauliLindbladMap format.
+            measurement_noise_map: Learned measurement noise, either in PauliLindbladMap format or as
+                the result array of a TREX calibration execution.
             observables: Observables in which the TREX algorithm mitigates their expectation values.
+            meas_qubits: Sorted list of circuit qubit indices that were measured. Relevant only when
+                ``measurement_noise_map`` is a calibration result array that has one column per measured
+                qubit. When given together with ``circuit_num_qubits``, the array is expanded to
+                full-circuit width so that the observable qubit indices remain correct.
+            circuit_num_qubits: Total number of qubits in the circuit. Required together with ``meas_qubits``.
 
         Returns:
             A dictionary mapping Pauli terms to their expectation values scale factors.
+
+        Raises:
+            ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
+            ValueError: If ``measurement_noise_map`` is a calibration result array and an observable term
+                acts on a qubit that is not in ``meas_qubits``.
         """
+        if (meas_qubits is None) != (circuit_num_qubits is None):
+            raise ValueError(
+                "``meas_qubits`` and ``circuit_num_qubits`` must be provided together, "
+                "but only one was given."
+            )
         observables = ObservablesArray.coerce(observables).ravel()
+
+        expand_calibration_array = (
+            isinstance(measurement_noise_map, np.ndarray) and meas_qubits is not None
+        )
+        if expand_calibration_array:
+            measurement_noise_map = expand_meas_data(
+                measurement_noise_map, meas_qubits, circuit_num_qubits
+            )
 
         scales_each_observable: dict[str, float] = {}
         for observable in observables:
-            scales_each_observable.update(
-                {
-                    str(obs_term): TREX.calculate_trex_factor(measurement_noise_map, obs_term)
-                    for obs_term in observable
-                }
-            )
+            for obs_term in observable:
+                if expand_calibration_array:
+                    unmeasured = sorted(
+                        set(QubitSparsePauli(obs_term).indices.tolist()) - set(meas_qubits)
+                    )
+                    if unmeasured:
+                        raise ValueError(
+                            f"The observable term {obs_term} acts on qubits {unmeasured}, which are "
+                            "not in ``meas_qubits`` and so are missing from the TREX calibration data."
+                        )
+                scales_each_observable[str(obs_term)] = TREX.calculate_trex_factor(
+                    measurement_noise_map, obs_term
+                )
         return scales_each_observable
 
 

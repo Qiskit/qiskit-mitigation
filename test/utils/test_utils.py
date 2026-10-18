@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import unittest
+import warnings
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -23,7 +24,12 @@ from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_mitigation import PEC, MitigationTask
 from qiskit_mitigation.trex import TREX
-from qiskit_mitigation.utils.meas_qubits import get_active_qubits, validate_meas_qubits
+from qiskit_mitigation.utils.meas_qubits import (
+    expand_meas_data,
+    expand_meas_data_and_flips,
+    get_active_qubits,
+    validate_meas_qubits,
+)
 from qiskit_mitigation.utils.utils import (
     _find_box_type,
     find_combined_unique_layers,
@@ -844,6 +850,31 @@ class TestGetActiveQubits(unittest.TestCase):
         get_active_qubits(circuit)
         self.assertEqual(circuit.count_ops().get("measure"), 2)
 
+    def test_delay_only_qubit_is_idle_even_with_several_delays(self):
+        circuit = QuantumCircuit(3)
+        circuit.sx(0)
+        circuit.delay(100, 1)
+        circuit.delay(50, 1)
+        self.assertEqual(get_active_qubits(circuit), [0])
+
+    def test_reset_makes_a_qubit_active(self):
+        circuit = QuantumCircuit(3)
+        circuit.reset(1)
+        self.assertEqual(get_active_qubits(circuit), [1])
+
+    def test_mid_circuit_measurement_followed_by_a_gate_is_active(self):
+        circuit = QuantumCircuit(3, 3)
+        circuit.measure(1, 0)
+        circuit.sx(1)
+        circuit.measure([0, 1, 2], [0, 1, 2])
+        self.assertEqual(get_active_qubits(circuit), [1])
+
+    def test_measurement_with_nothing_after_it_is_a_final_measurement(self):
+        circuit = QuantumCircuit(3, 3)
+        circuit.sx(0)
+        circuit.measure(1, 0)
+        self.assertEqual(get_active_qubits(circuit), [0])
+
 
 # ---------------------------------------------------------------------------
 # get_measured_qubits
@@ -902,27 +933,31 @@ class TestGetMeasuredQubits(unittest.TestCase):
     def test_twirling_strategy_all_returns_every_qubit_of_the_widest_circuit(self):
         circuits = [QuantumCircuit(2), QuantumCircuit(5)]
         observables = [[SparsePauliOp("ZI")], [SparsePauliOp("IIIIZ")]]
-        result = get_measured_qubits(
-            circuits, observables, custom_boxing_options={"twirling_strategy": "all"}
-        )
+        with self.assertWarnsRegex(UserWarning, "twirling_strategy"):
+            result = get_measured_qubits(
+                circuits, observables, custom_boxing_options={"twirling_strategy": "all"}
+            )
         self.assertEqual(result, [0, 1, 2, 3, 4])
 
     def test_twirling_strategy_all_in_a_list_of_options(self):
-        result = get_measured_qubits(
-            [QuantumCircuit(3), QuantumCircuit(3)],
-            [[SparsePauliOp("ZII")], [SparsePauliOp("ZII")]],
-            custom_boxing_options=[None, {"twirling_strategy": "all"}],
-        )
+        with self.assertWarnsRegex(UserWarning, "twirling_strategy"):
+            result = get_measured_qubits(
+                [QuantumCircuit(3), QuantumCircuit(3)],
+                [[SparsePauliOp("ZII")], [SparsePauliOp("ZII")]],
+                custom_boxing_options=[None, {"twirling_strategy": "all"}],
+            )
         self.assertEqual(result, [0, 1, 2])
 
     def test_other_twirling_strategies_do_not_measure_everything(self):
         circuit = QuantumCircuit(4)
         circuit.sx(0)
-        result = get_measured_qubits(
-            [circuit],
-            [[SparsePauliOp("IIIZ")]],
-            custom_boxing_options={"twirling_strategy": "active"},
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = get_measured_qubits(
+                [circuit],
+                [[SparsePauliOp("IIIZ")]],
+                custom_boxing_options={"twirling_strategy": "active"},
+            )
         self.assertEqual(result, [0])
 
     def test_no_circuits_returns_empty_list(self):
@@ -943,6 +978,65 @@ class TestGetMeasuredQubits(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # validate_meas_qubits
 # ---------------------------------------------------------------------------
+
+
+class TestExpandMeasData(unittest.TestCase):
+    """Tests for expand_meas_data."""
+
+    def test_correct_columns_placed(self):
+        """Measured columns should end up at the right positions in the expanded array."""
+        meas_qubits = [1, 3]
+        data = np.array([[[True, False]]], dtype=bool)  # shape (1, 1, 2)
+        expanded = expand_meas_data(data, meas_qubits, circuit_num_qubits=5)
+        self.assertEqual(expanded.shape, (1, 1, 5))
+        self.assertTrue(expanded[0, 0, 1])  # meas_qubits[0]=1 → col 1
+        self.assertFalse(expanded[0, 0, 3])  # meas_qubits[1]=3 → col 3 (False)
+        # Unmeasured columns are zero
+        for q in [0, 2, 4]:
+            self.assertFalse(expanded[0, 0, q])
+
+    def test_multidim_shapes(self):
+        """Expansion works for 4-D and 5-D arrays (standard data shapes)."""
+        meas_qubits = [0, 2]
+        for shape_prefix in [(2, 3, 4), (2, 3, 2, 4)]:
+            data = np.ones((*shape_prefix, 2), dtype=bool)
+            expanded = expand_meas_data(data, meas_qubits, circuit_num_qubits=4)
+            self.assertEqual(expanded.shape, (*shape_prefix, 4))
+            np.testing.assert_array_equal(expanded[..., meas_qubits], data)
+            np.testing.assert_array_equal(expanded[..., [1, 3]], False)
+
+
+class TestExpandMeasDataAndFlips(unittest.TestCase):
+    """Tests for :func:`expand_meas_data_and_flips`."""
+
+    def test_data_and_flips_are_expanded_to_the_circuit_width(self):
+        data = np.array([[[True, False]]])
+        flips = np.array([[[False, True]]])
+        expanded_data, expanded_flips = expand_meas_data_and_flips(data, flips, [1, 3], 5)
+        np.testing.assert_array_equal(expanded_data, [[[False, True, False, False, False]]])
+        np.testing.assert_array_equal(expanded_flips, [[[False, False, False, True, False]]])
+
+    def test_missing_flips_stay_none(self):
+        expanded_data, expanded_flips = expand_meas_data_and_flips(
+            np.zeros((1, 1, 2), dtype=bool), None, [0, 2], 3
+        )
+        self.assertEqual(expanded_data.shape, (1, 1, 3))
+        self.assertIsNone(expanded_flips)
+
+    def test_full_measurement_returns_the_inputs_unchanged(self):
+        data = np.zeros((1, 1, 3), dtype=bool)
+        flips = np.ones((1, 1, 3), dtype=bool)
+        result_data, result_flips = expand_meas_data_and_flips(data, flips, None, None)
+        self.assertIs(result_data, data)
+        self.assertIs(result_flips, flips)
+
+    def test_raises_when_only_meas_qubits_is_given(self):
+        with self.assertRaisesRegex(ValueError, "must be provided together"):
+            expand_meas_data_and_flips(np.zeros((1, 1)), None, [0], None)
+
+    def test_raises_when_only_circuit_num_qubits_is_given(self):
+        with self.assertRaisesRegex(ValueError, "must be provided together"):
+            expand_meas_data_and_flips(np.zeros((1, 1)), None, None, 2)
 
 
 class TestValidateMeasQubits(unittest.TestCase):

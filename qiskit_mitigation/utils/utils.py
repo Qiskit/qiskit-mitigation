@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -106,12 +107,13 @@ def get_measured_qubits(
     """Return the qubits to measure so that all given circuits and observables share one measurement layer.
 
     The returned qubits are the union, across all circuits, of the qubits in the support of the
-    observables and the qubits with non-trivial instructions on them (see :func:`get_active_qubits`).
+    observables and the qubits with non-trivial instructions on them (those that are not idle, ignoring barriers and delays).
     Measuring all of them guarantees that every twirled qubit is measured. The result can be passed as
     ``meas_qubits`` to :meth:`~.MitigationTask.prepare` and to :func:`find_combined_unique_layers`.
 
     If any of the boxing options sets ``twirling_strategy="all"``, every qubit of the widest circuit is
-    returned, since in that case all qubits are boxed together with the measurements.
+    returned, since in that case all qubits are boxed together with the measurements. A warning is
+    emitted, because measuring all qubits means that no partial measurement is used.
 
     Args:
         circuits: The circuits to find the measured qubits for.
@@ -139,6 +141,12 @@ def get_measured_qubits(
         options is not None and options.get("twirling_strategy") == "all"
         for options in options_list
     ):
+        warnings.warn(
+            'The boxing options set ``twirling_strategy="all"``, which boxes and measures all '
+            "qubits, so all the qubits of the widest circuit are returned and no partial "
+            "measurement is used.",
+            stacklevel=2,
+        )
         return list(range(max((circuit.num_qubits for circuit in circuits), default=0)))
 
     measured: set[int] = set()

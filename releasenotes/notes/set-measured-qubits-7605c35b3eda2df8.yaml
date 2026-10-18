@@ -1,0 +1,41 @@
+---
+features:
+  - |
+    Added a ``meas_qubits`` argument to the ``prepare`` method of :class:`~qiskit_mitigation.MitigationTask`,
+    :class:`~qiskit_mitigation.PEC`, :class:`~qiskit_mitigation.PEA` and :class:`~qiskit_mitigation.GateFolding`.
+    It sets the qubits that are measured at the end of the circuit, so that the ``_meas`` register holds only
+    one bit per measured qubit instead of one bit per qubit of the circuit. The default, ``None``, keeps
+    measuring all the qubits. The postprocessing expands the results back to the width of the circuit, so
+    observables keep using the qubit indices of the circuit.
+
+    ``meas_qubits`` must include every qubit in the support of the observables and every qubit with
+    non-trivial instructions, otherwise a ``ValueError`` is raised.
+  - |
+    Added :func:`~qiskit_mitigation.get_measured_qubits`, which returns a set of qubits that is sufficient
+    to measure given circuits and observables. Its result can be passed as ``meas_qubits`` to ``prepare``.
+  - |
+    Added a ``meas_qubits`` argument to :func:`~qiskit_mitigation.find_combined_unique_layers`. The measured
+    qubits affect the boxing, so to find the same layers that are used in execution, pass the same
+    ``meas_qubits`` to ``find_combined_unique_layers`` and to ``prepare``.
+  - |
+    When a :class:`~qiskit_mitigation.TREX` instance is used together with ``meas_qubits``, its calibration
+    circuit measures the union of the ``meas_qubits`` of all the tasks connected to it, and the learned
+    readout noise model is placed on the matching qubits of the circuit.
+  - |
+    ``compute_expectation_value`` of :class:`~qiskit_mitigation.MitigationTask` and its equivalents in
+    :class:`~qiskit_mitigation.PEC`, :class:`~qiskit_mitigation.PEA` and :class:`~qiskit_mitigation.GateFolding`
+    accept the new ``meas_qubits`` and ``circuit_num_qubits`` arguments, which must be given together. They
+    are needed to postprocess results of partial measurements without a task instance.
+    :meth:`~qiskit_mitigation.TREX.trex_factors_each_term` accepts the same arguments for calibration data
+    that was measured on a subset of the qubits.
+upgrade:
+  - |
+    The passthrough data that is saved by ``prepare`` now contains the ``meas_qubits`` and ``circuit_num_qubits``
+    fields. Programs that were prepared by an older version of ``qiskit-mitigation`` can still be loaded and
+    postprocessed. Results of programs that were prepared with a ``meas_qubits`` subset can only be
+    postprocessed correctly with a version that supports ``meas_qubits``.
+fixes:
+  - |
+    A mitigation task is now added to a :class:`~qiskit_mitigation.TREX` instance only once its ``prepare``
+    call completed successfully. Previously a failed ``prepare`` call left the task in the TREX instance, so the
+    TREX calibration circuit also measured the qubits of a task that was not prepared.

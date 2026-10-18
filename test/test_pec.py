@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 from qiskit import QuantumCircuit
+from qiskit.circuit import Parameter
 from qiskit.primitives import PubResult
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, SparsePauliOp
@@ -1040,6 +1041,15 @@ class TestPECCreateInstanceFromPassthroughData(unittest.TestCase):
         )
         self.assertEqual(pec._program_item_index, 4)
 
+    def test_old_format_without_partial_measurement_keys_means_full_measurement(self):
+        """Results saved before ``meas_qubits`` existed have neither key and are full-width."""
+        passthrough = self._minimal_passthrough()
+        self.assertNotIn("meas_qubits", passthrough)
+        self.assertNotIn("circuit_num_qubits", passthrough)
+        pec = PEC.create_instance_from_passthrough_data(passthrough)
+        self.assertIsNone(pec.meas_qubits)
+        self.assertIsNone(pec.circuit_num_qubits)
+
     def test_raises_when_mitigation_missing_or_wrong(self):
         """Missing or non-'pec' mitigation field must raise ValueError."""
         passthrough = self._minimal_passthrough()
@@ -1193,6 +1203,40 @@ class TestPECPartialSupport(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, r"Qubits \[1\].*not in ``meas_qubits``"):
             PEC().prepare(self._gate_circuit(), obs, None, noise_maps={}, meas_qubits=[0, 3])
 
+    def test_failed_prepare_does_not_register_the_task_in_trex(self):
+        """A rejected ``meas_qubits`` leaves the TREX untouched, so retrying registers the task once."""
+        circuit = self._gate_circuit()
+        obs = [SparsePauliOp("ZIII")]
+        trex = TREX()
+        pec = PEC()
+        with self.assertRaises(ValueError):
+            pec.prepare(circuit, obs, None, trex=trex, noise_maps={}, meas_qubits=[0, 3])
+        self.assertEqual(trex.tasks, [])
+
+        layers = find_combined_unique_layers(
+            [circuit],
+            mitigation_types=[PEC()],
+            custom_boxing_options={"add_tags": "unique_box"},
+            meas_qubits=[0, 1, 3],
+            box_types="gates",
+        )
+        noise_maps = {
+            get_annotation(layer.operation, InjectNoise).ref: PauliLindbladMap.identity(
+                len(layer.qubits)
+            )
+            for layer in layers
+        }
+        pec.prepare(
+            circuit,
+            obs,
+            None,
+            trex=trex,
+            custom_boxing_options={"add_tags": "unique_box"},
+            noise_maps=noise_maps,
+            meas_qubits=[0, 1, 3],
+        )
+        self.assertEqual(trex.tasks, [pec])
+
     def test_box_circuit_raises_when_gate_qubit_is_not_measured(self):
         """``PEC._box_circuit`` (used to find the layers) validates ``meas_qubits`` too."""
         with self.assertRaisesRegex(ValueError, "not in ``meas_qubits``"):
@@ -1261,6 +1305,63 @@ class TestPECPartialSupport(unittest.TestCase):
                 noise_maps=noise_maps,
                 meas_qubits=[0, 1, 3],
             )
+
+
+class TestPECParametrizedPartialMeasurement(unittest.TestCase):
+    """Parametrized circuits measured on a subset of the qubits, with and without broadcasting."""
+
+    MEAS_QUBITS = (1, 3)
+
+    def setUp(self):
+        theta = Parameter("theta")
+        self.circuit = QuantumCircuit(5)
+        self.circuit.rx(theta, 1)
+        self.circuit.cz(1, 3)
+        # Z on qubit 1 and Z on qubit 3
+        self.obs = [
+            SparsePauliOp.from_sparse_list([("Z", [1], 1.0)], num_qubits=5),
+            SparsePauliOp.from_sparse_list([("Z", [3], 1.0)], num_qubits=5),
+        ]
+        layers = find_combined_unique_layers(
+            [self.circuit],
+            mitigation_types=[PEC()],
+            meas_qubits=self.MEAS_QUBITS,
+            box_types="gates",
+        )
+        self.noise_maps = {
+            get_annotation(layer.operation, InjectNoise).ref: PauliLindbladMap.identity(
+                len(layer.qubits)
+            )
+            for layer in layers
+        }
+
+    def _postprocess(self, parameters, broadcast_obs_and_params):
+        pec = PEC()
+        program = pec.prepare(
+            self.circuit,
+            self.obs,
+            parameters,
+            noise_maps=self.noise_maps,
+            shots_per_randomization=4,
+            num_randomizations=2,
+            broadcast_obs_and_params=broadcast_obs_and_params,
+            scale_randomizations_by_gamma=False,
+            meas_qubits=self.MEAS_QUBITS,
+        )
+        shape = program.items[0].shape
+        # compressed column 0 is circuit qubit 1 (always 0), column 1 is circuit qubit 3 (always 1)
+        data = np.zeros((*shape, 4, 2), dtype=bool)
+        data[..., 1] = True
+        pauli_signs = np.zeros((*shape, 1), dtype=bool)
+        return pec.postprocess({"_meas": data, "pauli_signs": pauli_signs}).data.evs
+
+    def test_every_parameter_is_executed_for_each_observable(self):
+        evs = self._postprocess(np.array([[0.1], [0.2], [0.3]]), broadcast_obs_and_params=False)
+        np.testing.assert_allclose(evs, [[1.0, 1.0, 1.0], [-1.0, -1.0, -1.0]], atol=1e-10)
+
+    def test_broadcast_pairs_each_observable_with_its_parameter(self):
+        evs = self._postprocess(np.array([[0.1], [0.2]]), broadcast_obs_and_params=True)
+        np.testing.assert_allclose(evs, [1.0, -1.0], atol=1e-10)
 
 
 if __name__ == "__main__":
