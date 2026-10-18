@@ -93,7 +93,7 @@ class PEA(MitigationTask):
         cls,
         circuit: QuantumCircuit,
         boxing_options: dict | None,
-        meas_qubits: list[int] | None = None,
+        meas_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -154,6 +154,7 @@ class PEA(MitigationTask):
         broadcast_obs_and_params: bool = False,
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
+        meas_qubits: Sequence[int] | None = None,
         *,
         noise_maps: dict[str, PauliLindbladMap] | None = None,
         noise_factors: Sequence[float | int] = (1, 3, 5),
@@ -185,6 +186,11 @@ class PEA(MitigationTask):
             trex: A TREX mitigation instance that will be used to mitigate readout errors.
             quantum_program: The quantum program to add an item for. If None, a new program will
                 be created.
+            meas_qubits: The indices of the qubits to measure. If ``None``, all qubits are measured.
+                Otherwise it must include every qubit in the support of the observables and every
+                qubit with non-trivial instructions. Use :func:`~qiskit_mitigation.get_measured_qubits`
+                to compute such a set. To get the same measurement layers as the ones found by
+                :func:`~qiskit_mitigation.find_combined_unique_layers`, give both the same ``meas_qubits``.
             noise_maps: A mapping between layer ref to a noise model to use for noise amplification.
                 The dict might contain layers not present in the given circuit, but must contain all
                 the mitigated layers. Assumes that the unique layers used for noise learning were extracted
@@ -205,6 +211,9 @@ class PEA(MitigationTask):
 
         Returns:
             A :class:`~.QuantumProgram` with PEA mitigated item that can be executed via Executor.
+
+        Raises:
+            ValueError: If ``meas_qubits`` is not sufficient to measure the circuit and the observables.
         """
         if noise_maps is None:
             raise ValueError("noise_maps is missing")
@@ -229,6 +238,7 @@ class PEA(MitigationTask):
             broadcast_obs_and_params,
             trex,
             quantum_program,
+            meas_qubits,
         )
 
         self.noise_factors = np.array(noise_factors, dtype=float)

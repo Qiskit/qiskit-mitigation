@@ -193,7 +193,7 @@ class GateFolding(MitigationTask):
         cls,
         circuit: QuantumCircuit,
         boxing_options: dict | None,
-        meas_qubits: list[int] | None = None,
+        meas_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -260,6 +260,7 @@ class GateFolding(MitigationTask):
         broadcast_obs_and_params: bool = False,
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
+        meas_qubits: Sequence[int] | None = None,
         *,
         folding_method: Literal["random", "front", "back"] = "random",
         noise_factors: Sequence[float | int] = (1, 3, 5),
@@ -291,6 +292,11 @@ class GateFolding(MitigationTask):
             trex: A TREX mitigation instance that will be used to mitigate readout errors.
             quantum_program: The quantum program to add an item for. If None, a new program will
                 be created.
+            meas_qubits: The indices of the qubits to measure. If ``None``, all qubits are measured.
+                Otherwise it must include every qubit in the support of the observables and every
+                qubit with non-trivial instructions. Use :func:`~qiskit_mitigation.get_measured_qubits`
+                to compute such a set. To get the same measurement layers as the ones found by
+                :func:`~qiskit_mitigation.find_combined_unique_layers`, give both the same ``meas_qubits``.
             folding_method: The technique to use to fold the 2-qubit gates to amplify the noise.
                 If the noise factor requires amplifying only a subset of the gates, then these
                 gates are selected according to the method:
@@ -316,6 +322,9 @@ class GateFolding(MitigationTask):
 
         Returns:
             A :class:`~.QuantumProgram` with GateFolding mitigated item that can be executed via Executor.
+
+        Raises:
+            ValueError: If ``meas_qubits`` is not sufficient to measure the circuit and the observables.
         """
         if folding_method not in ["random", "front", "back"]:
             raise ValueError(
@@ -342,6 +351,7 @@ class GateFolding(MitigationTask):
             broadcast_obs_and_params,
             trex,
             quantum_program,
+            meas_qubits,
         )
 
         self.noise_factors = np.array(noise_factors, dtype=float)

@@ -25,6 +25,7 @@ from qiskit.primitives import PubResult
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, SparsePauliOp
 from qiskit_mitigation.trex import TREX
+from qiskit_mitigation.utils.utils import find_combined_unique_layers, get_measured_qubits
 from qiskit_mitigation.zne.pea import PEA
 from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
@@ -993,6 +994,7 @@ class TestPEAPartialSupport(unittest.TestCase):
             noise_factors=[1, 3],
             shots_per_randomization=8,
             num_randomizations=1,
+            meas_qubits=[2],
         )
 
         self.assertEqual(pea.meas_qubits, [2])
@@ -1013,6 +1015,104 @@ class TestPEAPartialSupport(unittest.TestCase):
         )
         # data XOR flips → all-ones → ⟨Z⟩ = -1 at every noise factor → extrapolated = -1
         np.testing.assert_allclose(pub.data.evs, [-1.0], atol=1e-6)
+
+    def _gate_circuit(self):
+        qc = QuantumCircuit(4)
+        qc.sx(0)
+        qc.cz(0, 1)
+        return qc
+
+    def test_raises_when_observable_qubit_is_not_measured(self):
+        """The support of the observables must be measured; checked before the noise maps."""
+        obs = [SparsePauliOp("ZIII")]  # Z on qubit 3
+        with self.assertRaisesRegex(ValueError, r"observables act on qubits \[3\]"):
+            PEA().prepare(
+                self._gate_circuit(),
+                obs,
+                None,
+                noise_maps={},
+                noise_factors=[1, 3],
+                meas_qubits=[0, 1],
+            )
+
+    def test_raises_when_gate_qubit_is_not_measured(self):
+        obs = [SparsePauliOp("ZIII")]
+        with self.assertRaisesRegex(ValueError, r"Qubits \[1\].*not in ``meas_qubits``"):
+            PEA().prepare(
+                self._gate_circuit(),
+                obs,
+                None,
+                noise_maps={},
+                noise_factors=[1, 3],
+                meas_qubits=[0, 3],
+            )
+
+    def test_box_circuit_raises_when_gate_qubit_is_not_measured(self):
+        """``PEA._box_circuit`` (used to find the layers) validates ``meas_qubits`` too."""
+        with self.assertRaisesRegex(ValueError, "not in ``meas_qubits``"):
+            PEA._box_circuit(self._gate_circuit(), {}, [0])
+
+    def test_layers_of_find_combined_unique_layers_match_prepare(self):
+        """Noise learned on the layers found with ``meas_qubits`` is usable by ``prepare``."""
+        qc = self._gate_circuit()
+        obs = [SparsePauliOp("ZIII")]
+        meas_qubits = get_measured_qubits([qc], [obs])
+        self.assertEqual(meas_qubits, [0, 1, 3])
+        layers = find_combined_unique_layers(
+            [qc],
+            mitigation_types=[PEA()],
+            custom_boxing_options={"add_tags": "unique_box"},
+            meas_qubits=meas_qubits,
+            box_types="gates",
+        )
+        noise_maps = {
+            get_annotation(layer.operation, InjectNoise).ref: PauliLindbladMap.identity(
+                len(layer.qubits)
+            )
+            for layer in layers
+        }
+        pea = PEA()
+        program = pea.prepare(
+            qc,
+            obs,
+            None,
+            custom_boxing_options={"add_tags": "unique_box"},
+            noise_maps=noise_maps,
+            noise_factors=[1, 3],
+            shots_per_randomization=4,
+            num_randomizations=1,
+            meas_qubits=meas_qubits,
+        )
+        self.assertEqual(len(program.items), 1)
+        self.assertEqual(pea.meas_qubits, meas_qubits)
+
+    def test_layers_found_with_other_meas_qubits_do_not_match_prepare(self):
+        """Layers found with a different ``meas_qubits`` have other refs than the ones of ``prepare``."""
+        qc = self._gate_circuit()
+        obs = [SparsePauliOp("ZIII")]
+        layers = find_combined_unique_layers(
+            [qc],
+            mitigation_types=[PEA()],
+            custom_boxing_options={"add_tags": "unique_box"},
+            meas_qubits=[0, 1, 2, 3],
+            box_types="gates",
+        )
+        noise_maps = {
+            get_annotation(layer.operation, InjectNoise).ref: PauliLindbladMap.identity(
+                len(layer.qubits)
+            )
+            for layer in layers
+        }
+        with self.assertRaisesRegex(ValueError, "Noise model is missing"):
+            PEA().prepare(
+                qc,
+                obs,
+                None,
+                custom_boxing_options={"add_tags": "unique_box"},
+                noise_maps=noise_maps,
+                noise_factors=[1, 3],
+                meas_qubits=[0, 1, 3],
+            )
 
 
 if __name__ == "__main__":

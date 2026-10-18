@@ -19,17 +19,21 @@ import unittest
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit import BoxOp, CircuitInstruction, Gate
+from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_mitigation import PEC, MitigationTask
 from qiskit_mitigation.trex import TREX
+from qiskit_mitigation.utils.meas_qubits import get_active_qubits, validate_meas_qubits
 from qiskit_mitigation.utils.utils import (
     _find_box_type,
     find_combined_unique_layers,
+    get_measured_qubits,
     load_tasks_from_result,
 )
 from qiskit_mitigation.zne.gate_folding import GateFolding
 from qiskit_mitigation.zne.pea import PEA
 from samplomatic.quantum_program import QuantumProgramResult
+from samplomatic.utils import find_unique_box_instructions
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -439,19 +443,12 @@ class TestFindBoxType(unittest.TestCase):
 class TestFindCombinedUniqueLayersValidation(unittest.TestCase):
     def setUp(self):
         self.circuit = _simple_circuit()
-        self.observables = [SparsePauliOp("ZZ")]
-
-    def test_raises_when_observables_length_mismatch(self):
-        """Supplying fewer observables than circuits must raise ValueError."""
-        with self.assertRaises(ValueError):
-            find_combined_unique_layers([self.circuit, self.circuit], observables=self.observables)
 
     def test_raises_when_mitigation_types_length_mismatch(self):
         """Supplying fewer mitigation_types than circuits must raise ValueError."""
         with self.assertRaises(ValueError):
             find_combined_unique_layers(
                 [self.circuit, self.circuit],
-                observables=self.observables * 2,
                 mitigation_types=[MitigationTask()],
             )
 
@@ -460,38 +457,20 @@ class TestFindCombinedUniqueLayersValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             find_combined_unique_layers(
                 [self.circuit, self.circuit],
-                observables=self.observables * 2,
                 custom_boxing_options=[{}, {}, {}],
             )
 
     def test_returns_list(self):
         """The return type must be a list."""
-        result = find_combined_unique_layers([self.circuit], observables=self.observables)
+        result = find_combined_unique_layers([self.circuit])
         self.assertIsInstance(result, list)
 
     def test_each_element_is_circuit_instruction(self):
         """Every returned element must be a CircuitInstruction."""
-        layers = find_combined_unique_layers([self.circuit], observables=self.observables)
+        layers = find_combined_unique_layers([self.circuit])
         self.assertTrue(len(layers) > 0)
         for layer in layers:
             self.assertIsInstance(layer, CircuitInstruction)
-
-    def test_layers_follow_observable_support(self):
-        """Qubits outside the observable support are not measured, which changes the layers."""
-        circuit = QuantumCircuit(3)
-        circuit.sx(0)
-        circuit.cz(0, 1)
-        circuit.sx(1)
-        circuit.cz(1, 2)
-        circuit.sx(2)
-        circuit.sx(0)
-
-        layers_full = find_combined_unique_layers([circuit], observables=[SparsePauliOp("ZZZ")])
-        layers_partial = find_combined_unique_layers([circuit], observables=[SparsePauliOp("IZZ")])
-
-        # The unmeasured qubit 2 is boxed separately from the measurement box.
-        self.assertNotIn(1, {layer.operation.num_qubits for layer in layers_full})
-        self.assertIn(1, {layer.operation.num_qubits for layer in layers_partial})
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +483,6 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
 
     def setUp(self):
         self.circuit = _simple_circuit()
-        self.observables = [SparsePauliOp("ZZ")]
 
     # --- box_types='all' ---
 
@@ -514,10 +492,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         pec = PEC()
         tasks = [task_unmitigated, pec]
         combined_layers = find_combined_unique_layers(
-            [self.circuit, self.circuit],
-            observables=self.observables * 2,
-            mitigation_types=tasks,
-            box_types="all",
+            [self.circuit, self.circuit], mitigation_types=tasks, box_types="all"
         )
         # PEC boxing adds an extra gate box; combined result has gates + measurement types
         types = {_find_box_type(layer) for layer in combined_layers}
@@ -526,9 +501,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
 
     def test_all_without_mitigation_types(self):
         """box_types='all' without mitigation_types defaults to MitigationTask boxing."""
-        layers = find_combined_unique_layers(
-            [self.circuit, self.circuit], observables=self.observables * 2, box_types="all"
-        )
+        layers = find_combined_unique_layers([self.circuit, self.circuit], box_types="all")
         types = {_find_box_type(layer) for layer in layers}
         self.assertIn("gates", types)
         self.assertIn("measurement", types)
@@ -536,10 +509,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_all_with_single_mitigation_task(self):
         """box_types='all' with a single MitigationTask returns gate and measurement layers."""
         layers = find_combined_unique_layers(
-            [self.circuit],
-            observables=self.observables,
-            mitigation_types=[MitigationTask()],
-            box_types="all",
+            [self.circuit], mitigation_types=[MitigationTask()], box_types="all"
         )
         self.assertTrue(len(layers) > 0)
         types = {_find_box_type(layer) for layer in layers}
@@ -549,7 +519,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_all_with_single_pec(self):
         """box_types='all' with a single PEC task returns gate and measurement layers."""
         layers = find_combined_unique_layers(
-            [self.circuit], observables=self.observables, mitigation_types=[PEC()], box_types="all"
+            [self.circuit], mitigation_types=[PEC()], box_types="all"
         )
         self.assertTrue(len(layers) > 0)
         types = {_find_box_type(layer) for layer in layers}
@@ -564,10 +534,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         pec = PEC()
         tasks = [task_unmitigated, pec]
         combined_layers = find_combined_unique_layers(
-            [self.circuit, self.circuit],
-            observables=self.observables * 2,
-            mitigation_types=tasks,
-            box_types="gates",
+            [self.circuit, self.circuit], mitigation_types=tasks, box_types="gates"
         )
         self.assertTrue(len(combined_layers) > 0, "Expected at least one gate box")
         for layer in combined_layers:
@@ -575,9 +542,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
 
     def test_gates_only_without_mitigation_types(self):
         """box_types='gates' without mitigation_types returns only gate boxes."""
-        layers = find_combined_unique_layers(
-            [self.circuit, self.circuit], observables=self.observables * 2, box_types="gates"
-        )
+        layers = find_combined_unique_layers([self.circuit, self.circuit], box_types="gates")
         self.assertTrue(len(layers) > 0)
         for layer in layers:
             self.assertEqual(_find_box_type(layer), "gates")
@@ -585,10 +550,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_gates_only_with_single_mitigation_task(self):
         """box_types='gates' with a single MitigationTask returns only gate boxes."""
         layers = find_combined_unique_layers(
-            [self.circuit],
-            observables=self.observables,
-            mitigation_types=[MitigationTask()],
-            box_types="gates",
+            [self.circuit], mitigation_types=[MitigationTask()], box_types="gates"
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
@@ -597,10 +559,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_gates_only_with_single_pec(self):
         """box_types='gates' with a single PEC task returns only gate boxes."""
         layers = find_combined_unique_layers(
-            [self.circuit],
-            observables=self.observables,
-            mitigation_types=[PEC()],
-            box_types="gates",
+            [self.circuit], mitigation_types=[PEC()], box_types="gates"
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
@@ -614,10 +573,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         pec = PEC()
         tasks = [task_unmitigated, pec]
         combined_layers = find_combined_unique_layers(
-            [self.circuit, self.circuit],
-            observables=self.observables * 2,
-            mitigation_types=tasks,
-            box_types="measurement",
+            [self.circuit, self.circuit], mitigation_types=tasks, box_types="measurement"
         )
         self.assertTrue(len(combined_layers) > 0, "Expected at least one measurement box")
         for layer in combined_layers:
@@ -625,9 +581,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
 
     def test_measurement_only_without_mitigation_types(self):
         """box_types='measurement' without mitigation_types returns only measurement boxes."""
-        layers = find_combined_unique_layers(
-            [self.circuit, self.circuit], observables=self.observables * 2, box_types="measurement"
-        )
+        layers = find_combined_unique_layers([self.circuit, self.circuit], box_types="measurement")
         self.assertTrue(len(layers) > 0)
         for layer in layers:
             self.assertEqual(_find_box_type(layer), "measurement")
@@ -635,10 +589,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_measurement_only_with_single_mitigation_task(self):
         """box_types='measurement' with a single MitigationTask returns only measurement boxes."""
         layers = find_combined_unique_layers(
-            [self.circuit],
-            observables=self.observables,
-            mitigation_types=[MitigationTask()],
-            box_types="measurement",
+            [self.circuit], mitigation_types=[MitigationTask()], box_types="measurement"
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
@@ -647,10 +598,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
     def test_measurement_only_with_single_pec(self):
         """box_types='measurement' with a single PEC task returns only measurement boxes."""
         layers = find_combined_unique_layers(
-            [self.circuit],
-            observables=self.observables,
-            mitigation_types=[PEC()],
-            box_types="measurement",
+            [self.circuit], mitigation_types=[PEC()], box_types="measurement"
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
@@ -660,26 +608,18 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
 
     def test_duplicate_circuits_produce_same_unique_layers_as_single_circuit(self):
         """Passing the same circuit twice must not duplicate the unique layers."""
-        single = find_combined_unique_layers(
-            [self.circuit], observables=self.observables, box_types="all"
-        )
-        doubled = find_combined_unique_layers(
-            [self.circuit, self.circuit], observables=self.observables * 2, box_types="all"
-        )
+        single = find_combined_unique_layers([self.circuit], box_types="all")
+        doubled = find_combined_unique_layers([self.circuit, self.circuit], box_types="all")
         self.assertEqual(len(single), len(doubled))
 
     def test_pec_produces_more_gate_boxes_than_mitigation_task(self):
         """PEC boxing introduces an extra injection box, so combining MitigationTask + PEC
         must yield more gate-type unique layers than MitigationTask alone."""
         layers_task = find_combined_unique_layers(
-            [self.circuit],
-            observables=self.observables,
-            mitigation_types=[MitigationTask()],
-            box_types="gates",
+            [self.circuit], mitigation_types=[MitigationTask()], box_types="gates"
         )
         layers_combined = find_combined_unique_layers(
             [self.circuit, self.circuit],
-            observables=self.observables * 2,
             mitigation_types=[MitigationTask(), PEC()],
             box_types="gates",
         )
@@ -691,7 +631,6 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         """A single dict passed as custom_boxing_options must work for multiple circuits."""
         layers = find_combined_unique_layers(
             [self.circuit, self.circuit],
-            observables=self.observables * 2,
             custom_boxing_options={"enable_measures": True},
             box_types="all",
         )
@@ -701,11 +640,351 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         """A list of boxing-option dicts (one per circuit) must be accepted."""
         layers = find_combined_unique_layers(
             [self.circuit, self.circuit],
-            observables=self.observables * 2,
             custom_boxing_options=[{"enable_measures": True}, {"enable_measures": True}],
             box_types="all",
         )
         self.assertTrue(len(layers) > 0)
+
+
+# ---------------------------------------------------------------------------
+# find_combined_unique_layers — meas_qubits
+# ---------------------------------------------------------------------------
+
+
+def _three_qubit_gate_circuit() -> QuantumCircuit:
+    """Return a 3-qubit circuit with gates on every qubit."""
+    circuit = QuantumCircuit(3)
+    circuit.sx(0)
+    circuit.cz(0, 1)
+    circuit.sx(1)
+    circuit.cz(1, 2)
+    circuit.sx(2)
+    circuit.sx(0)
+    return circuit
+
+
+class TestFindCombinedUniqueLayersMeasQubits(unittest.TestCase):
+    """Tests for the ``meas_qubits`` argument of ``find_combined_unique_layers``."""
+
+    def setUp(self):
+        self.circuit = _three_qubit_gate_circuit()
+
+    def test_none_equals_measuring_all_qubits(self):
+        """``meas_qubits=None`` gives the same layers as listing every qubit."""
+        layers_none = find_combined_unique_layers([self.circuit])
+        layers_all = find_combined_unique_layers([self.circuit], meas_qubits=[0, 1, 2])
+        self.assertEqual(len(layers_none), len(layers_all))
+        self.assertEqual(
+            [layer.operation.num_qubits for layer in layers_none],
+            [layer.operation.num_qubits for layer in layers_all],
+        )
+
+    def test_unsorted_and_duplicate_meas_qubits_are_accepted(self):
+        """The order and repetition of ``meas_qubits`` must not matter."""
+        layers_sorted = find_combined_unique_layers([self.circuit], meas_qubits=[0, 1, 2])
+        layers_shuffled = find_combined_unique_layers([self.circuit], meas_qubits=[2, 0, 1, 1])
+        self.assertEqual(len(layers_sorted), len(layers_shuffled))
+
+    def test_insufficient_meas_qubits_raises(self):
+        """Not measuring a qubit that has gates on it must raise an explicit ``ValueError``."""
+        with self.assertRaisesRegex(ValueError, r"\[2\].*not in ``meas_qubits``"):
+            find_combined_unique_layers([self.circuit], meas_qubits=[0, 1])
+
+    def test_out_of_range_meas_qubits_raises(self):
+        """Qubits outside the circuit must raise an explicit ``ValueError``."""
+        with self.assertRaisesRegex(ValueError, "out of range"):
+            find_combined_unique_layers([self.circuit], meas_qubits=[0, 1, 2, 3])
+
+    def test_shared_meas_qubits_are_checked_for_every_circuit(self):
+        """The shared ``meas_qubits`` must be sufficient for each of the circuits."""
+        wide = QuantumCircuit(3)
+        wide.sx(2)
+        narrow = QuantumCircuit(3)
+        narrow.sx(0)
+        with self.assertRaisesRegex(ValueError, r"\[2\]"):
+            find_combined_unique_layers([narrow, wide], meas_qubits=[0])
+
+    def test_shared_meas_qubits_give_identical_measurement_layers(self):
+        """Circuits that end with the same gate layer and share ``meas_qubits`` share their measurement layer."""
+        first = QuantumCircuit(3)
+        first.sx(0)
+        first.cz(0, 1)
+        first.cz(1, 2)
+        second = QuantumCircuit(3)
+        second.cz(1, 2)
+        second.sx(0)
+        second.cz(0, 1)
+        measurement_layers = find_combined_unique_layers(
+            [first, second], meas_qubits=[0, 1, 2], box_types="measurement"
+        )
+        self.assertEqual(len(measurement_layers), 1)
+
+    def test_measurement_layers_span_exactly_the_measured_qubits(self):
+        """Every measurement layer acts on the measured qubits and nothing else."""
+        circuit = QuantumCircuit(5)
+        circuit.sx(0)
+        circuit.cz(0, 1)
+        for meas_qubits in ([0, 1], [0, 1, 3], [0, 1, 2, 3, 4]):
+            with self.subTest(meas_qubits=meas_qubits):
+                layers = find_combined_unique_layers(
+                    [circuit], meas_qubits=meas_qubits, box_types="measurement"
+                )
+                self.assertEqual(len(layers), 1)
+                layer = layers[0]
+                self.assertEqual(
+                    sorted(circuit.find_bit(q).index for q in layer.qubits), meas_qubits
+                )
+                measured = [
+                    op for op in layer.operation.body.data if op.operation.name == "measure"
+                ]
+                self.assertEqual(len(measured), len(meas_qubits))
+
+    def test_different_meas_qubits_give_different_measurement_layers(self):
+        """``meas_qubits`` affects the boxing, so it must match the one given to ``prepare``."""
+        circuit = QuantumCircuit(3)
+        circuit.sx(0)
+        circuit.cz(0, 1)
+        layers_01 = find_combined_unique_layers(
+            [circuit], meas_qubits=[0, 1], box_types="measurement"
+        )
+        layers_012 = find_combined_unique_layers(
+            [circuit], meas_qubits=[0, 1, 2], box_types="measurement"
+        )
+        self.assertNotEqual(layers_01[0].qubits, layers_012[0].qubits)
+
+    def test_layers_match_those_of_prepare(self):
+        """The layers found with ``meas_qubits`` are the ones used by ``prepare`` with the same ``meas_qubits``."""
+        circuit = _three_qubit_gate_circuit()
+        observables = [SparsePauliOp("IIZ")]
+        meas_qubits = get_measured_qubits([circuit], [observables])
+        task = MitigationTask()
+        task.prepare(circuit, observables, None, meas_qubits=meas_qubits)
+        found = find_combined_unique_layers([circuit], meas_qubits=meas_qubits)
+        prepared = find_unique_box_instructions(
+            instructions=task.boxed_circuit, normalize_annotations=None, undress_boxes=True
+        )
+        self.assertEqual(len(found), len(prepared))
+
+    def test_twirling_strategy_all_requires_every_qubit(self):
+        """``twirling_strategy="all"`` boxes every qubit, so every qubit must be measured."""
+        with self.assertRaisesRegex(ValueError, "twirling_strategy"):
+            find_combined_unique_layers(
+                [self.circuit],
+                custom_boxing_options={"twirling_strategy": "all"},
+                meas_qubits=[0, 1],
+            )
+
+    def test_unmeasured_idle_qubits_leave_no_gates_after_measurement(self):
+        """With the qubits from ``get_measured_qubits`` no box is added after the measurement."""
+        circuit = QuantumCircuit(5)
+        circuit.sx(0)
+        circuit.cz(0, 1)
+        circuit.sx(2)
+        meas_qubits = get_measured_qubits([circuit], [[SparsePauliOp("ZIIII")]])
+        self.assertEqual(meas_qubits, [0, 1, 2, 4])
+        boxed = MitigationTask._box_circuit(circuit, None, meas_qubits)
+        last_box = boxed.data[-1].operation
+        self.assertTrue(
+            any(instruction.operation.name == "measure" for instruction in last_box.body)
+        )
+
+    def test_meas_qubits_missing_active_qubit_raises_in_box_circuit(self):
+        """Leaving an active qubit unmeasured would leave gates after the measurement box.
+
+        ``_box_circuit`` rejects it instead of producing such a circuit.
+        """
+        circuit = QuantumCircuit(3)
+        circuit.sx(0)
+        circuit.cz(1, 2)
+        with self.assertRaisesRegex(ValueError, r"\[1, 2\].*not in ``meas_qubits``"):
+            MitigationTask._box_circuit(circuit, None, [0])
+
+
+# ---------------------------------------------------------------------------
+# get_active_qubits
+# ---------------------------------------------------------------------------
+
+
+class TestGetActiveQubits(unittest.TestCase):
+    """Tests for :func:`get_active_qubits`."""
+
+    def test_qubits_with_gates_are_active(self):
+        circuit = QuantumCircuit(4)
+        circuit.sx(0)
+        circuit.cz(0, 2)
+        self.assertEqual(get_active_qubits(circuit), [0, 2])
+
+    def test_empty_circuit_has_no_active_qubits(self):
+        self.assertEqual(get_active_qubits(QuantumCircuit(3)), [])
+
+    def test_barrier_and_delay_do_not_make_a_qubit_active(self):
+        circuit = QuantumCircuit(4)
+        circuit.sx(0)
+        circuit.barrier(1, 2)
+        circuit.delay(10, 3)
+        self.assertEqual(get_active_qubits(circuit), [0])
+
+    def test_identity_and_zero_angle_gates_are_active(self):
+        """Any non-barrier, non-delay instruction counts, even a trivial one."""
+        circuit = QuantumCircuit(3)
+        circuit.id(1)
+        circuit.rz(0.0, 2)
+        self.assertEqual(get_active_qubits(circuit), [1, 2])
+
+    def test_final_measurements_are_ignored(self):
+        circuit = QuantumCircuit(3, 3)
+        circuit.sx(0)
+        circuit.measure([0, 1, 2], [0, 1, 2])
+        self.assertEqual(get_active_qubits(circuit), [0])
+
+    def test_does_not_modify_the_circuit(self):
+        circuit = QuantumCircuit(2, 2)
+        circuit.sx(0)
+        circuit.measure([0, 1], [0, 1])
+        get_active_qubits(circuit)
+        self.assertEqual(circuit.count_ops().get("measure"), 2)
+
+
+# ---------------------------------------------------------------------------
+# get_measured_qubits
+# ---------------------------------------------------------------------------
+
+
+class TestGetMeasuredQubits(unittest.TestCase):
+    """Tests for :func:`get_measured_qubits`."""
+
+    def test_union_of_observable_support_and_active_qubits(self):
+        circuit = QuantumCircuit(5)
+        circuit.sx(0)
+        circuit.cz(0, 1)
+        result = get_measured_qubits([circuit], [[SparsePauliOp("ZIIII")]])
+        self.assertEqual(result, [0, 1, 4])
+
+    def test_observable_support_on_an_idle_qubit_is_included(self):
+        circuit = QuantumCircuit(3)
+        circuit.sx(0)
+        result = get_measured_qubits([circuit], [[SparsePauliOp("IZI")]])
+        self.assertEqual(result, [0, 1])
+
+    def test_union_across_circuits(self):
+        first = QuantumCircuit(4)
+        first.sx(0)
+        second = QuantumCircuit(4)
+        second.sx(3)
+        result = get_measured_qubits(
+            [first, second], [[SparsePauliOp("IIZI")], [SparsePauliOp("IIII")]]
+        )
+        self.assertEqual(result, [0, 1, 3])
+
+    def test_projector_observables_are_included(self):
+        """Projector terms (given as dict observables) count towards the observable support."""
+        circuit = QuantumCircuit(3)
+        observables = ObservablesArray([{"1II": 1.0, "IIr": 0.5}])
+        self.assertEqual(get_measured_qubits([circuit], [observables]), [0, 2])
+
+    def test_accepts_observables_arrays(self):
+        circuit = QuantumCircuit(3)
+        circuit.sx(0)
+        observables = ObservablesArray([SparsePauliOp("IIZ"), SparsePauliOp("ZII")])
+        self.assertEqual(get_measured_qubits([circuit], [observables]), [0, 2])
+
+    def test_result_is_sorted_without_duplicates(self):
+        circuit = QuantumCircuit(4)
+        circuit.sx(3)
+        circuit.sx(1)
+        result = get_measured_qubits([circuit], [[SparsePauliOp("ZIII")]])
+        self.assertEqual(result, sorted(set(result)))
+
+    def test_raises_when_observables_length_mismatch(self):
+        with self.assertRaisesRegex(ValueError, "observable arrays"):
+            get_measured_qubits([QuantumCircuit(2), QuantumCircuit(2)], [[SparsePauliOp("ZI")]])
+
+    def test_twirling_strategy_all_returns_every_qubit_of_the_widest_circuit(self):
+        circuits = [QuantumCircuit(2), QuantumCircuit(5)]
+        observables = [[SparsePauliOp("ZI")], [SparsePauliOp("IIIIZ")]]
+        result = get_measured_qubits(
+            circuits, observables, custom_boxing_options={"twirling_strategy": "all"}
+        )
+        self.assertEqual(result, [0, 1, 2, 3, 4])
+
+    def test_twirling_strategy_all_in_a_list_of_options(self):
+        result = get_measured_qubits(
+            [QuantumCircuit(3), QuantumCircuit(3)],
+            [[SparsePauliOp("ZII")], [SparsePauliOp("ZII")]],
+            custom_boxing_options=[None, {"twirling_strategy": "all"}],
+        )
+        self.assertEqual(result, [0, 1, 2])
+
+    def test_other_twirling_strategies_do_not_measure_everything(self):
+        circuit = QuantumCircuit(4)
+        circuit.sx(0)
+        result = get_measured_qubits(
+            [circuit],
+            [[SparsePauliOp("IIIZ")]],
+            custom_boxing_options={"twirling_strategy": "active"},
+        )
+        self.assertEqual(result, [0])
+
+    def test_no_circuits_returns_empty_list(self):
+        self.assertEqual(get_measured_qubits([], []), [])
+
+    def test_result_is_accepted_by_prepare_and_find_combined_unique_layers(self):
+        """The helper's output is always sufficient for both pathways."""
+        circuit = _three_qubit_gate_circuit()
+        observables = [SparsePauliOp("IIZ")]
+        meas_qubits = get_measured_qubits([circuit], [observables])
+        task = MitigationTask()
+        task.prepare(circuit, observables, None, meas_qubits=meas_qubits)
+        self.assertEqual(task.meas_qubits, meas_qubits)
+        layers = find_combined_unique_layers([circuit], meas_qubits=meas_qubits)
+        self.assertTrue(len(layers) > 0)
+
+
+# ---------------------------------------------------------------------------
+# validate_meas_qubits
+# ---------------------------------------------------------------------------
+
+
+class TestValidateMeasQubits(unittest.TestCase):
+    """Tests for :func:`validate_meas_qubits`."""
+
+    def setUp(self):
+        self.circuit = QuantumCircuit(4)
+        self.circuit.sx(0)
+        self.circuit.cz(1, 2)
+
+    def test_returns_sorted_unique_qubits(self):
+        self.assertEqual(validate_meas_qubits(self.circuit, [3, 2, 1, 1, 0]), [0, 1, 2, 3])
+
+    def test_accepts_numpy_integers(self):
+        self.assertEqual(validate_meas_qubits(self.circuit, np.array([0, 1, 2])), [0, 1, 2])
+
+    def test_unmeasured_active_qubits_raise(self):
+        with self.assertRaisesRegex(ValueError, r"Qubits \[1, 2\].*get_measured_qubits"):
+            validate_meas_qubits(self.circuit, [0])
+
+    def test_unmeasured_idle_qubits_are_allowed(self):
+        self.assertEqual(validate_meas_qubits(self.circuit, [0, 1, 2]), [0, 1, 2])
+
+    def test_negative_index_raises(self):
+        with self.assertRaisesRegex(ValueError, r"\[-1\].*out of range"):
+            validate_meas_qubits(self.circuit, [-1, 0, 1, 2])
+
+    def test_index_too_large_raises(self):
+        with self.assertRaisesRegex(ValueError, r"\[4\].*out of range"):
+            validate_meas_qubits(self.circuit, [0, 1, 2, 4])
+
+    def test_twirling_strategy_all_requires_every_qubit(self):
+        with self.assertRaisesRegex(ValueError, "3 of the 4"):
+            validate_meas_qubits(self.circuit, [0, 1, 2], {"twirling_strategy": "all"})
+
+    def test_twirling_strategy_all_accepts_every_qubit(self):
+        result = validate_meas_qubits(self.circuit, [3, 2, 1, 0], {"twirling_strategy": "all"})
+        self.assertEqual(result, [0, 1, 2, 3])
+
+    def test_boxing_options_without_strategy_use_the_active_qubits_check(self):
+        with self.assertRaisesRegex(ValueError, "not in ``meas_qubits``"):
+            validate_meas_qubits(self.circuit, [0], {"enable_measures": True})
 
 
 # ---------------------------------------------------------------------------

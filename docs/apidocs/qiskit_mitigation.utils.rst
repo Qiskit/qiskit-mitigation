@@ -11,6 +11,7 @@ Utils (:mod:`qiskit_mitigation.utils`)
 
 .. autofunction:: load_tasks_from_result
 .. autofunction:: find_combined_unique_layers
+.. autofunction:: get_measured_qubits
 .. autofunction:: executor_expectation_values
 .. autofunction:: get_measurement_bases
 .. autofunction:: map_observable_isa_to_canonical

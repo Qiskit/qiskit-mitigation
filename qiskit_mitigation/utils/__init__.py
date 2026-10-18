@@ -21,11 +21,12 @@ from .observable_mappings import (
     map_observable_isa_to_virtual,
     map_observable_virtual_to_canonical,
 )
-from .utils import find_combined_unique_layers, load_tasks_from_result
+from .utils import find_combined_unique_layers, get_measured_qubits, load_tasks_from_result
 
 __all__ = [
     "executor_expectation_values",
     "find_combined_unique_layers",
+    "get_measured_qubits",
     "get_measurement_bases",
     "load_tasks_from_result",
     "map_observable_isa_to_canonical",

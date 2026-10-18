@@ -18,7 +18,7 @@
 from .mitigation_task import MitigationTask
 from .pec import PEC
 from .trex import TREX
-from .utils.utils import find_combined_unique_layers, load_tasks_from_result
+from .utils.utils import find_combined_unique_layers, get_measured_qubits, load_tasks_from_result
 from .zne.gate_folding import GateFolding
 from .zne.pea import PEA
 
@@ -29,5 +29,6 @@ __all__ = [
     "GateFolding",
     "MitigationTask",
     "find_combined_unique_layers",
+    "get_measured_qubits",
     "load_tasks_from_result",
 ]

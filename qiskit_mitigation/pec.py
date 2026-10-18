@@ -95,7 +95,7 @@ class PEC(MitigationTask):
         cls,
         circuit: QuantumCircuit,
         boxing_options: dict | None,
-        meas_qubits: list[int] | None = None,
+        meas_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -108,7 +108,7 @@ class PEC(MitigationTask):
         Args:
             circuit: The circuit to group into boxes.
             boxing_options: Dictionary of boxing options. If ``None``, default boxing options are used.
-            meas_qubits: Sorted list of circuit qubit indices to measure.  Forwarded to the base
+            meas_qubits: Circuit qubit indices to measure.  Forwarded to the base
                 implementation.  If ``None``, all qubits are measured.
 
         Returns:
@@ -157,6 +157,7 @@ class PEC(MitigationTask):
         broadcast_obs_and_params: bool = False,
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
+        meas_qubits: Sequence[int] | None = None,
         *,
         noise_maps: dict[str, PauliLindbladMap] | None = None,
         scale_randomizations_by_gamma: bool = True,
@@ -187,6 +188,11 @@ class PEC(MitigationTask):
             broadcast_obs_and_params: Whether to broadcast observables and parameters.
             trex: A TREX mitigation instance that will be used to mitigate readout errors.
             quantum_program: The quantum program to add an item for. If None, a new program will be created.
+            meas_qubits: The indices of the qubits to measure. If ``None``, all qubits are measured.
+                Otherwise it must include every qubit in the support of the observables and every
+                qubit with non-trivial instructions. Use :func:`~qiskit_mitigation.get_measured_qubits`
+                to compute such a set. To get the same measurement layers as the ones found by
+                :func:`~qiskit_mitigation.find_combined_unique_layers`, give both the same ``meas_qubits``.
             noise_maps: A mapping between layer ref to a noise model to use for PEC mitigation
                 method. The dict might contain layers not present in the given circuit, but must contain all
                 the mitigated layers. Assumes that the unique layers used for noise learning were extracted
@@ -202,6 +208,9 @@ class PEC(MitigationTask):
 
         Returns:
             A :class:`~.QuantumProgram` with PEC mitigated item that can be executed via Executor.
+
+        Raises:
+            ValueError: If ``meas_qubits`` is not sufficient to measure the circuit and the observables.
         """
         if noise_maps is None:
             raise ValueError("noise_maps is missing")
@@ -226,6 +235,7 @@ class PEC(MitigationTask):
             broadcast_obs_and_params,
             trex,
             quantum_program,
+            meas_qubits,
         )
 
         boxed_circuit = self._box_circuit(

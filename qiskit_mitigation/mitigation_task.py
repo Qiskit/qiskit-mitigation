@@ -45,6 +45,7 @@ from qiskit_mitigation.utils.expectation_values import (
     _compute_single_term_exp_val_with_twirl_variance,
     executor_expectation_values,
 )
+from qiskit_mitigation.utils.meas_qubits import validate_meas_qubits
 from qiskit_mitigation.utils.measurement_bases import (
     _convert_pauli_basis,
     _identify_measure_basis,
@@ -140,7 +141,7 @@ class MitigationTask:
         cls,
         circuit: QuantumCircuit,
         boxing_options: dict | None,
-        meas_qubits: list[int] | None = None,
+        meas_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -154,15 +155,15 @@ class MitigationTask:
             circuit: The circuit to group into boxes.
             boxing_options: Dictionary of :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` options.
                 If ``None``, default boxing options are used.
-            meas_qubits: Sorted list of circuit qubit indices to measure.  Only these qubits will
-                have a classical bit assigned in the ``_meas`` register.  If ``None``, all qubits
-                are measured (legacy behaviour).
+            meas_qubits: Circuit qubit indices to measure.  Only these qubits will have a classical
+                bit assigned in the ``_meas`` register.  If ``None``, all qubits are measured.
 
         Returns:
             The boxed circuit.
 
         Raises:
             ValueError: If ``boxing_options["enable_measures"]`` is False.
+            ValueError: If ``meas_qubits`` is not sufficient to measure the circuit.
             ValueError: If the boxing pass manager fails to run.
         """
         if boxing_options is None:
@@ -183,11 +184,11 @@ class MitigationTask:
         prepared_circuit = circuit.remove_final_measurements(inplace=False)
 
         # Determine which qubits to measure
-        qubits_to_measure = (
-            [prepared_circuit.qubits[q] for q in meas_qubits]
-            if meas_qubits is not None
-            else list(prepared_circuit.qubits)
-        )
+        if meas_qubits is None:
+            qubits_to_measure = list(prepared_circuit.qubits)
+        else:
+            meas_qubits = validate_meas_qubits(circuit, meas_qubits, edited_boxing_options)
+            qubits_to_measure = [prepared_circuit.qubits[q] for q in meas_qubits]
 
         # Add final measurements only on the active qubits
         creg = ClassicalRegister(len(qubits_to_measure), "_meas")
@@ -495,6 +496,7 @@ class MitigationTask:
         broadcast_obs_and_params: bool,
         trex: TREX | None,
         quantum_program: QuantumProgram | None,
+        meas_qubits: Sequence[int] | None = None,
     ):
         """Save the basic variables of the circuit and observables as internal variables.
 
@@ -508,6 +510,10 @@ class MitigationTask:
             broadcast_obs_and_params: Whether to broadcast observables and parameters.
             trex: A TREX mitigation instance that will be used to mitigate readout errors.
             quantum_program: The quantum program to add an item for.
+            meas_qubits: The indices of the qubits to measure. If ``None``, all qubits are measured.
+
+        Raises:
+            ValueError: If ``meas_qubits`` is not sufficient to measure the circuit and the observables.
         """
         # save variables in the class
         self.circuit = circuit
@@ -551,7 +557,18 @@ class MitigationTask:
         self.num_randomizations = num_randomizations
         self.shots_per_randomization = shots_per_randomization
         self.trex = trex
-        self.meas_qubits = self._get_observable_qubit_indices(self.observables)
+        if meas_qubits is None:
+            self.meas_qubits = list(range(circuit.num_qubits))
+        else:
+            self.meas_qubits = validate_meas_qubits(circuit, meas_qubits, custom_boxing_options)
+            if unmeasured := sorted(
+                set(self._get_observable_qubit_indices(self.observables)) - set(self.meas_qubits)
+            ):
+                raise ValueError(
+                    f"The observables act on qubits {unmeasured}, which are not in ``meas_qubits``. "
+                    "Every qubit in the support of the observables must be measured. "
+                    "Use ``get_measured_qubits`` to compute a sufficient set of qubits."
+                )
         self.circuit_num_qubits = circuit.num_qubits
 
     def _extract_item_data(
@@ -637,6 +654,7 @@ class MitigationTask:
         broadcast_obs_and_params: bool = False,
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
+        meas_qubits: Sequence[int] | None = None,
     ) -> QuantumProgram:
         """Creates a :class:`~.QuantumProgram` for executing via Executor.
 
@@ -663,9 +681,17 @@ class MitigationTask:
             trex: A TREX mitigation instance that will be used to mitigate readout errors.
             quantum_program: The quantum program to add an item for. If None, a new program will
                 be created.
+            meas_qubits: The indices of the qubits to measure. If ``None``, all qubits are measured.
+                Otherwise it must include every qubit in the support of the observables and every
+                qubit with non-trivial instructions. Use :func:`~qiskit_mitigation.get_measured_qubits`
+                to compute such a set. To get the same measurement layers as the ones found by
+                :func:`~qiskit_mitigation.find_combined_unique_layers`, give both the same ``meas_qubits``.
 
         Returns:
             A :class:`~.QuantumProgram` that can be executed via Executor.
+
+        Raises:
+            ValueError: If ``meas_qubits`` is not sufficient to measure the circuit and the observables.
         """
         # add measurement twirls to the task if TREX is on
         if trex is not None:
@@ -687,6 +713,7 @@ class MitigationTask:
             broadcast_obs_and_params,
             trex,
             quantum_program,
+            meas_qubits,
         )
 
         boxed_circuit = self._box_circuit(

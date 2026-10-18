@@ -27,6 +27,7 @@ from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliList, SparsePauliOp
 from qiskit_mitigation.mitigation_task import MitigationTask
 from qiskit_mitigation.trex import TREX
+from qiskit_mitigation.utils.utils import get_measured_qubits, load_tasks_from_result
 from samplomatic import build
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult
 
@@ -1258,7 +1259,7 @@ class TestBoxCircuitTargetedMeasurement(unittest.TestCase):
     def test_register_width_equals_meas_qubits(self):
         """The _meas register should have exactly len(meas_qubits) bits."""
         qc = _simple_circuit(5)
-        meas_qubits = [1, 3]
+        meas_qubits = [0, 1, 3]
         boxed = self.task._box_circuit(qc, {}, meas_qubits)
         # Find the _meas classical register
         meas_cregs = [cr for cr in boxed.cregs if cr.name == "_meas"]
@@ -1266,11 +1267,231 @@ class TestBoxCircuitTargetedMeasurement(unittest.TestCase):
         self.assertEqual(len(meas_cregs[0]), len(meas_qubits))
 
     def test_full_width_when_no_meas_qubits(self):
-        """Without meas_qubits the register should span all qubits (legacy behaviour)."""
+        """Without meas_qubits the register should span all qubits."""
         qc = _simple_circuit(4)
         boxed = self.task._box_circuit(qc, {}, meas_qubits=None)
         meas_cregs = [cr for cr in boxed.cregs if cr.name == "_meas"]
         self.assertEqual(len(meas_cregs[0]), 4)
+
+
+class TestPrepareMeasQubitsValidation(unittest.TestCase):
+    """Tests for the ``meas_qubits`` argument of :meth:`MitigationTask.prepare`."""
+
+    def setUp(self):
+        # gates on qubits 0, 1 and 2; qubits 3 and 4 are idle
+        self.circuit = QuantumCircuit(5)
+        self.circuit.sx(0)
+        self.circuit.cz(0, 1)
+        self.circuit.sx(2)
+        # Z on qubit 4 (Pauli labels are little-endian)
+        self.obs = [SparsePauliOp("ZIIII")]
+
+    @staticmethod
+    def _meas_register_width(task):
+        return len(next(cr for cr in task.boxed_circuit.cregs if cr.name == "_meas"))
+
+    def test_default_measures_all_qubits(self):
+        """Without ``meas_qubits`` every qubit is measured, whatever the observables are."""
+        task = MitigationTask()
+        task.prepare(self.circuit, self.obs, parameters=None)
+        self.assertEqual(task.meas_qubits, [0, 1, 2, 3, 4])
+        self.assertEqual(self._meas_register_width(task), 5)
+
+    def test_explicit_meas_qubits_are_stored_sorted_without_duplicates(self):
+        task = MitigationTask()
+        task.prepare(self.circuit, self.obs, parameters=None, meas_qubits=[4, 2, 1, 0, 0])
+        self.assertEqual(task.meas_qubits, [0, 1, 2, 4])
+        self.assertEqual(self._meas_register_width(task), 4)
+
+    def test_only_meas_qubits_are_measured(self):
+        """Idle qubits that are not in ``meas_qubits`` are not part of the measurement register."""
+        task = MitigationTask()
+        task.prepare(self.circuit, self.obs, parameters=None, meas_qubits=[0, 1, 2, 4])
+        measured = {
+            task.boxed_circuit.find_bit(qubit).index
+            for instruction in task.boxed_circuit.data[-1].operation.body.data
+            if instruction.operation.name == "measure"
+            for qubit in instruction.qubits
+        }
+        self.assertEqual(measured, {0, 1, 2, 4})
+
+    def test_meas_qubits_accepts_any_sequence(self):
+        for meas_qubits in ((0, 1, 2, 4), np.array([0, 1, 2, 4]), range(5)):
+            with self.subTest(meas_qubits=meas_qubits):
+                task = MitigationTask()
+                task.prepare(self.circuit, self.obs, parameters=None, meas_qubits=meas_qubits)
+                self.assertEqual(task.meas_qubits, sorted(set(int(q) for q in meas_qubits)))
+
+    def test_meas_qubits_is_stored_in_passthrough_data(self):
+        task = MitigationTask()
+        program = task.prepare(self.circuit, self.obs, parameters=None, meas_qubits=[0, 1, 2, 4])
+        passthrough = program.passthrough_data["qiskit_mitigation"][0]
+        self.assertEqual(passthrough["meas_qubits"], [0, 1, 2, 4])
+        self.assertEqual(passthrough["circuit_num_qubits"], 5)
+
+    def test_raises_when_observable_qubit_is_not_measured(self):
+        """The support of the observables must be measured."""
+        task = MitigationTask()
+        with self.assertRaisesRegex(ValueError, r"observables act on qubits \[4\]"):
+            task.prepare(self.circuit, self.obs, parameters=None, meas_qubits=[0, 1, 2])
+
+    def test_raises_when_observable_qubit_is_not_measured_for_any_of_the_observables(self):
+        """The check covers the support of all the observables."""
+        obs = [SparsePauliOp("ZIIII"), SparsePauliOp("IZIII")]
+        task = MitigationTask()
+        with self.assertRaisesRegex(ValueError, r"observables act on qubits \[3\]"):
+            task.prepare(self.circuit, obs, parameters=None, meas_qubits=[0, 1, 2, 4])
+
+    def test_raises_when_gate_qubit_is_not_measured(self):
+        """Every qubit with non-trivial instructions must be measured."""
+        task = MitigationTask()
+        with self.assertRaisesRegex(ValueError, r"Qubits \[2\].*not in ``meas_qubits``"):
+            task.prepare(self.circuit, self.obs, parameters=None, meas_qubits=[0, 1, 4])
+
+    def test_raises_when_meas_qubits_is_empty(self):
+        task = MitigationTask()
+        with self.assertRaisesRegex(ValueError, "at least one qubit"):
+            task.prepare(self.circuit, self.obs, parameters=None, meas_qubits=[])
+
+    def test_raises_when_meas_qubits_is_out_of_range(self):
+        for meas_qubits in ([0, 1, 2, 4, 5], [-1, 0, 1, 2, 4]):
+            with self.subTest(meas_qubits=meas_qubits):
+                task = MitigationTask()
+                with self.assertRaisesRegex(ValueError, "out of range"):
+                    task.prepare(self.circuit, self.obs, parameters=None, meas_qubits=meas_qubits)
+
+    def test_twirling_strategy_all_requires_all_qubits(self):
+        """``twirling_strategy="all"`` boxes every qubit together with the measurements."""
+        task = MitigationTask()
+        with self.assertRaisesRegex(ValueError, "twirling_strategy"):
+            task.prepare(
+                self.circuit,
+                self.obs,
+                parameters=None,
+                custom_boxing_options={"twirling_strategy": "all"},
+                meas_qubits=[0, 1, 2, 4],
+            )
+
+    def test_twirling_strategy_all_accepts_all_qubits(self):
+        task = MitigationTask()
+        task.prepare(
+            self.circuit,
+            self.obs,
+            parameters=None,
+            custom_boxing_options={"twirling_strategy": "all"},
+            meas_qubits=[0, 1, 2, 3, 4],
+        )
+        self.assertEqual(task.meas_qubits, [0, 1, 2, 3, 4])
+
+    def test_failed_validation_leaves_no_program_item(self):
+        """A rejected ``meas_qubits`` must not add an item to a given quantum program."""
+        program = MitigationTask().prepare(self.circuit, self.obs, parameters=None)
+        with self.assertRaises(ValueError):
+            MitigationTask().prepare(
+                self.circuit, self.obs, parameters=None, quantum_program=program, meas_qubits=[0]
+            )
+        self.assertEqual(len(program.items), 1)
+        self.assertEqual(len(program.passthrough_data["qiskit_mitigation"]), 1)
+
+    def test_get_measured_qubits_output_is_always_accepted(self):
+        """The helper returns a set of qubits that ``prepare`` accepts."""
+        circuits = [
+            self.circuit,
+            QuantumCircuit(3),
+            QuantumCircuit(4, 4),
+        ]
+        circuits[2].h(3)
+        circuits[2].measure(range(4), range(4))
+        for circuit in circuits:
+            for qubit in range(circuit.num_qubits):
+                observables = [
+                    SparsePauliOp.from_sparse_list(
+                        [("Z", [qubit], 1.0)], num_qubits=circuit.num_qubits
+                    )
+                ]
+                with self.subTest(num_qubits=circuit.num_qubits, observable_qubit=qubit):
+                    meas_qubits = get_measured_qubits([circuit], [observables])
+                    task = MitigationTask()
+                    task.prepare(circuit, observables, parameters=None, meas_qubits=meas_qubits)
+                    self.assertEqual(task.meas_qubits, meas_qubits)
+
+    def test_all_measurements_are_in_the_last_box(self):
+        """With a sufficient ``meas_qubits`` no gates are left after the measurement box."""
+        task = MitigationTask()
+        task.prepare(self.circuit, self.obs, parameters=None, meas_qubits=[0, 1, 2, 4])
+        boxed = task.boxed_circuit
+        num_measures = [
+            sum(instr.operation.name == "measure" for instr in box.operation.body.data)
+            for box in boxed.data
+        ]
+        self.assertEqual(num_measures[-1], 4)
+        self.assertEqual(sum(num_measures), 4)
+
+    def test_final_measurements_in_circuit_do_not_count_as_active(self):
+        """Final measurements are replaced, so they do not force their qubits to be measured."""
+        circuit = QuantumCircuit(3, 3)
+        circuit.sx(0)
+        circuit.measure([0, 1, 2], [0, 1, 2])
+        task = MitigationTask()
+        task.prepare(circuit, [SparsePauliOp("IIZ")], parameters=None, meas_qubits=[0])
+        self.assertEqual(task.meas_qubits, [0])
+
+    def test_meas_qubits_with_parameters_and_broadcasting(self):
+        """``meas_qubits`` works together with parameters in both broadcast modes."""
+        theta = Parameter("theta")
+        circuit = QuantumCircuit(4)
+        circuit.rz(theta, 0)
+        circuit.cx(0, 1)
+        obs = ObservablesArray([SparsePauliOp("ZIII"), SparsePauliOp("IZII")])
+        for broadcast in (False, True):
+            with self.subTest(broadcast=broadcast):
+                task = MitigationTask()
+                program = task.prepare(
+                    circuit,
+                    obs,
+                    parameters=np.array([[0.1], [0.2]]),
+                    broadcast_obs_and_params=broadcast,
+                    meas_qubits=[0, 1, 2, 3],
+                )
+                self.assertEqual(len(program.items), 1)
+                self.assertEqual(task.meas_qubits, [0, 1, 2, 3])
+
+    def test_with_trex_the_meas_qubits_are_validated_and_calibrated(self):
+        """With TREX the validation still applies and the calibration measures the same qubits."""
+        trex = TREX()
+        with self.assertRaisesRegex(ValueError, "observables act on qubits"):
+            MitigationTask().prepare(
+                self.circuit, self.obs, parameters=None, trex=trex, meas_qubits=[0, 1, 2]
+            )
+        trex = TREX()
+        task = MitigationTask()
+        program = task.prepare(
+            self.circuit, self.obs, parameters=None, trex=trex, meas_qubits=[0, 1, 2, 4]
+        )
+        trex.prepare(2, program)
+        self.assertEqual(trex.meas_qubits, [0, 1, 2, 4])
+        calibration = program.items[-1]
+        self.assertEqual(len(next(cr for cr in calibration.circuit.cregs if cr.name == "_meas")), 4)
+
+    def test_round_trip_through_load_tasks_from_result(self):
+        """A task restored from the result postprocesses data of a partial measurement."""
+        task = MitigationTask()
+        program = task.prepare(
+            self.circuit,
+            self.obs,
+            parameters=None,
+            shots_per_randomization=4,
+            num_randomizations=2,
+            meas_qubits=[0, 1, 2, 4],
+        )
+        # compressed column 3 is circuit qubit 4, the one the observable acts on
+        data = np.zeros((2, 1, 4, 4), dtype=bool)
+        data[..., 3] = True
+        result = QuantumProgramResult([{"_meas": data}], passthrough_data=program.passthrough_data)
+        (restored,) = load_tasks_from_result(result)
+        self.assertEqual(restored.meas_qubits, [0, 1, 2, 4])
+        self.assertEqual(restored.circuit_num_qubits, 5)
+        np.testing.assert_allclose(restored.postprocess(result).data.evs, [-1.0], atol=1e-10)
 
 
 class TestExpandMeasData(unittest.TestCase):
@@ -1320,17 +1541,18 @@ class TestPrepareTargetedMeasurement(unittest.TestCase):
             parameters=None,
             shots_per_randomization=10,
             num_randomizations=1,
+            meas_qubits=[0, 1],
         )
 
         # Verify meas_qubits
-        self.assertEqual(task.meas_qubits, [0])
+        self.assertEqual(task.meas_qubits, [0, 1])
 
         # Verify boxed circuit register width
         meas_cregs = [cr for cr in task.boxed_circuit.cregs if cr.name == "_meas"]
-        self.assertEqual(len(meas_cregs[0]), 1)
+        self.assertEqual(len(meas_cregs[0]), 2)
 
-        # Synthetic data: shape (R=1, B=1, S=10, M=1) — all zeros → qubit 0 = |0⟩ → ⟨Z⟩ = +1
-        data_compressed = np.zeros((1, 1, 10, 1), dtype=bool)
+        # Synthetic data: shape (R=1, B=1, S=10, M=2) — all zeros → qubit 0 = |0⟩ → ⟨Z⟩ = +1
+        data_compressed = np.zeros((1, 1, 10, 2), dtype=bool)
         item_result = {"_meas": data_compressed}
 
         pub = task.postprocess(item_result)
@@ -1348,6 +1570,7 @@ class TestPrepareTargetedMeasurement(unittest.TestCase):
             parameters=None,
             shots_per_randomization=8,
             num_randomizations=1,
+            meas_qubits=[2],
         )
 
         self.assertEqual(task.meas_qubits, [2])
@@ -1373,6 +1596,7 @@ class TestPrepareTargetedMeasurement(unittest.TestCase):
             parameters=None,
             shots_per_randomization=8,
             num_randomizations=1,
+            meas_qubits=[1, 3],
         )
 
         self.assertEqual(task.meas_qubits, [1, 3])
@@ -1396,6 +1620,7 @@ class TestPrepareTargetedMeasurement(unittest.TestCase):
             parameters=None,
             shots_per_randomization=8,
             num_randomizations=1,
+            meas_qubits=[1, 3],
         )
 
         data_compressed = np.ones((1, 1, 8, 2), dtype=bool)
@@ -1414,6 +1639,7 @@ class TestPrepareTargetedMeasurement(unittest.TestCase):
             parameters=None,
             shots_per_randomization=8,
             num_randomizations=1,
+            meas_qubits=[1, 3],
         )
 
         # Compressed column 0 = qubit 1, column 1 = qubit 3
@@ -1439,6 +1665,7 @@ class TestPrepareTargetedMeasurement(unittest.TestCase):
             shots_per_randomization=8,
             num_randomizations=2,
             broadcast_obs_and_params=True,
+            meas_qubits=[1, 3],
         )
 
         self.assertEqual(task.meas_qubits, [1, 3])
@@ -1462,6 +1689,7 @@ class TestPrepareTargetedMeasurement(unittest.TestCase):
             parameters=None,
             shots_per_randomization=8,
             num_randomizations=1,
+            meas_qubits=[2],
         )
 
         self.assertEqual(task.meas_qubits, [2])

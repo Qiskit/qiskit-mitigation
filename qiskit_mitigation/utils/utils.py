@@ -24,6 +24,8 @@ from qiskit.quantum_info import SparsePauliOp
 from samplomatic.quantum_program import QuantumProgramResult
 from samplomatic.utils import find_unique_box_instructions, undress_box
 
+from .meas_qubits import get_active_qubits
+
 if TYPE_CHECKING:
     from qiskit_mitigation.mitigation_task import MitigationTask
 
@@ -96,38 +98,91 @@ def load_tasks_from_result(
     return tasks
 
 
-def find_combined_unique_layers(
-    circuits: list[QuantumCircuit],
+def get_measured_qubits(
+    circuits: Sequence[QuantumCircuit],
     observables: Sequence[ObservablesArray | Sequence[SparsePauliOp]],
-    mitigation_types: list[MitigationTask] | None = None,
-    custom_boxing_options: dict | list[dict] | None = None,
-    box_types: Literal["gates", "measurement", "all"] = "all",
-) -> list[CircuitInstruction]:
-    """Return the unique boxed layers found across the given circuits using the given boxing options.
+    custom_boxing_options: dict | Sequence[dict | None] | None = None,
+) -> list[int]:
+    """Return the qubits to measure so that all given circuits and observables share one measurement layer.
 
-    The returned list contains one instance of each distinct boxed layer (represented as a :class:`~.CircuitInstruction`) appearing in the input circuits.
-    Only the qubits in the support of each circuit's observables are measured, and this affects the boxing.
-    Some mitigation methods enforce relevant boxing options. By supllying the wanted mitigation methods, these options are enforced when boxing the circuits to find unique layers.
-    Supplying the wanted mitigation methods is recommended to ensure that the unique layers used for learning wiil be equal to those used in execution.
-    The returned boxes can be filtered so only boxes containing measurements, only boxes containing solely gates or all types of boxes are returned.
+    The returned qubits are the union, across all circuits, of the qubits in the support of the
+    observables and the qubits with non-trivial instructions on them (see :func:`get_active_qubits`).
+    Measuring all of them guarantees that every twirled qubit is measured. The result can be passed as
+    ``meas_qubits`` to :meth:`~.MitigationTask.prepare` and to :func:`find_combined_unique_layers`.
+
+    If any of the boxing options sets ``twirling_strategy="all"``, every qubit of the widest circuit is
+    returned, since in that case all qubits are boxed together with the measurements.
 
     Args:
-        circuits: The circuit to find the unique layers for.
-        observables: The observables of each circuit, used to determine which qubits are measured.
-            Must be the same length as ``circuits``.
-        mitigation_types: List of initiated mitigation classes that the circuits will be mitigated with. Each mitigation method might enforce boxing options that will affect the unique layers.
-            If given, the list must be the same length as ``circuits``.
-        custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function to find the unique layers.
-            If a single dict is given, the same custom boxing option will be used for all tasks. If ``None`` is given, the default boxing option will be used.
-        box_types: Can be either ``"gates"``, ``"measurements"`` or ``"all"``, corresponding to filter boxes with only gate layers, only measurement layers or all layers, respectively.
+        circuits: The circuits to find the measured qubits for.
+        observables: The observables of each circuit. Must be the same length as ``circuits``.
+        custom_boxing_options: The custom boxing options that will be used to box the circuits.
+            Either a single dict for all circuits, or one per circuit.
 
     Returns:
-        Unique boxed layers found across the given circuits using the given boxing options.
+        Sorted list of the qubit indices to measure.
+
+    Raises:
+        ValueError: If the number of observables does not match the number of circuits.
     """
     from qiskit_mitigation.mitigation_task import MitigationTask
 
     if len(observables) != len(circuits):
         raise ValueError("Number of observable arrays does not match number of circuits.")
+    if custom_boxing_options is None:
+        options_list: Sequence[dict | None] = []
+    elif isinstance(custom_boxing_options, dict):
+        options_list = [custom_boxing_options]
+    else:
+        options_list = custom_boxing_options
+    if any(
+        options is not None and options.get("twirling_strategy") == "all"
+        for options in options_list
+    ):
+        return list(range(max((circuit.num_qubits for circuit in circuits), default=0)))
+
+    measured: set[int] = set()
+    for circuit, circuit_observables in zip(circuits, observables, strict=True):
+        measured.update(get_active_qubits(circuit))
+        measured.update(MitigationTask._get_observable_qubit_indices(circuit_observables))
+    return sorted(measured)
+
+
+def find_combined_unique_layers(
+    circuits: list[QuantumCircuit],
+    mitigation_types: list[MitigationTask] | None = None,
+    custom_boxing_options: dict | list[dict] | None = None,
+    box_types: Literal["gates", "measurement", "all"] = "all",
+    meas_qubits: Sequence[int] | None = None,
+) -> list[CircuitInstruction]:
+    """Return the unique boxed layers found across the given circuits using the given boxing options.
+
+    The returned list contains one instance of each distinct boxed layer (represented as a :class:`~.CircuitInstruction`) appearing in the input circuits.
+    Some mitigation methods enforce relevant boxing options. By supllying the wanted mitigation methods, these options are enforced when boxing the circuits to find unique layers.
+    Supplying the wanted mitigation methods is recommended to ensure that the unique layers used for learning wiil be equal to those used in execution.
+    The returned boxes can be filtered so only boxes containing measurements, only boxes containing solely gates or all types of boxes are returned.
+
+    The measured qubits affect the boxing. To get the same layers as in execution, ``meas_qubits`` must be
+    the same as the ``meas_qubits`` given to :meth:`~.MitigationTask.prepare`.
+
+    Args:
+        circuits: The circuit to find the unique layers for.
+        mitigation_types: List of initiated mitigation classes that the circuits will be mitigated with. Each mitigation method might enforce boxing options that will affect the unique layers.
+            If given, the list must be the same length as ``circuits``.
+        custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function to find the unique layers.
+            If a single dict is given, the same custom boxing option will be used for all tasks. If ``None`` is given, the default boxing option will be used.
+        box_types: Can be either ``"gates"``, ``"measurements"`` or ``"all"``, corresponding to filter boxes with only gate layers, only measurement layers or all layers, respectively.
+        meas_qubits: The indices of the qubits to measure, shared by all circuits. If ``None``, all qubits of every circuit are measured.
+            It is the caller's responsibility to provide a set that is sufficient for the circuits, see :func:`get_measured_qubits`.
+
+    Returns:
+        Unique boxed layers found across the given circuits using the given boxing options.
+
+    Raises:
+        ValueError: If ``meas_qubits`` is not sufficient to measure one of the circuits.
+    """
+    from qiskit_mitigation.mitigation_task import MitigationTask
+
     if mitigation_types is None:
         mitigation_types = [MitigationTask()] * len(circuits)
     if len(mitigation_types) != len(circuits):
@@ -143,9 +198,9 @@ def find_combined_unique_layers(
         boxing_options_list = custom_boxing_options
 
     boxed_circuits = (
-        task._box_circuit(circuit, boxing_options, task._get_observable_qubit_indices(obs))
-        for task, circuit, obs, boxing_options in zip(
-            mitigation_types, circuits, observables, boxing_options_list, strict=True
+        task._box_circuit(circuit, boxing_options, meas_qubits)
+        for task, circuit, boxing_options in zip(
+            mitigation_types, circuits, boxing_options_list, strict=True
         )
     )
     instructions = (box for boxed_circuit in boxed_circuits for box in boxed_circuit)

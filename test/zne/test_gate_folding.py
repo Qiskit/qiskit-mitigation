@@ -1150,10 +1150,10 @@ class TestGateFoldingPartialSupport(unittest.TestCase):
     """Tests for GateFolding with observables that only cover a subset of circuit qubits."""
 
     def test_meas_qubits_set_correctly(self):
-        """``prepare`` must compute ``meas_qubits`` from observable support.
+        """``prepare`` must store the given ``meas_qubits``.
 
-        A 4-qubit circuit with a Z observable on qubit 0 only should produce
-        ``meas_qubits == [0]``.
+        A 4-qubit circuit with gates on qubits 0 and 1 and a Z observable on qubit 0 only should
+        produce ``meas_qubits == [0, 1]`` when those qubits are given.
         """
         qc = QuantumCircuit(4)
         qc.h(0)
@@ -1161,9 +1161,16 @@ class TestGateFoldingPartialSupport(unittest.TestCase):
         obs = [SparsePauliOp.from_sparse_list([("Z", [0], 1.0)], num_qubits=4)]
 
         gf = GateFolding()
-        gf.prepare(qc, obs, parameters=None, noise_factors=(1, 3), extrapolator=["fallback"])
+        gf.prepare(
+            qc,
+            obs,
+            parameters=None,
+            noise_factors=(1, 3),
+            extrapolator=["fallback"],
+            meas_qubits=[0, 1],
+        )
 
-        self.assertEqual(gf.meas_qubits, [0])
+        self.assertEqual(gf.meas_qubits, [0, 1])
 
     def test_postprocess_all_zeros_gives_plus_one(self):
         """Z on qubit 0 of a 4-qubit circuit; compressed all-zeros data → extrapolated ⟨Z⟩ = +1."""
@@ -1179,6 +1186,7 @@ class TestGateFoldingPartialSupport(unittest.TestCase):
             extrapolator=["fallback"],
             shots_per_randomization=4,
             num_randomizations=1,
+            meas_qubits=[0],
         )
 
         self.assertEqual(gf.meas_qubits, [0])
@@ -1203,6 +1211,7 @@ class TestGateFoldingPartialSupport(unittest.TestCase):
             extrapolator=["fallback"],
             shots_per_randomization=4,
             num_randomizations=1,
+            meas_qubits=[2],
         )
 
         self.assertEqual(gf.meas_qubits, [2])
@@ -1211,6 +1220,99 @@ class TestGateFoldingPartialSupport(unittest.TestCase):
         item_results = [{"_meas": np.ones((1, 1, 4, 1), dtype=bool)} for _ in range(2)]
         pub = gf.postprocess(item_results, noise_factors=[1.0, 3.0], extrapolator=["fallback"])
         np.testing.assert_allclose(pub.data.evs, [-1.0], atol=1e-10)
+
+    def _gate_circuit(self):
+        qc = QuantumCircuit(4)
+        qc.sx(0)
+        qc.cz(0, 1)
+        return qc
+
+    def test_default_measures_all_qubits(self):
+        """Without ``meas_qubits`` every qubit is measured in every noise factor item."""
+        gf = GateFolding()
+        program = gf.prepare(
+            self._gate_circuit(),
+            [SparsePauliOp("ZIII")],
+            None,
+            noise_factors=(1, 3),
+            extrapolator=["fallback"],
+        )
+        self.assertEqual(gf.meas_qubits, [0, 1, 2, 3])
+        for item in program.items:
+            meas_register = next(r for r in item.circuit.cregs if r.name == "_meas")
+            self.assertEqual(len(meas_register), 4)
+
+    def test_every_noise_factor_item_measures_only_meas_qubits(self):
+        gf = GateFolding()
+        program = gf.prepare(
+            self._gate_circuit(),
+            [SparsePauliOp("ZIII")],
+            None,
+            noise_factors=(1, 3, 5),
+            extrapolator=["fallback"],
+            meas_qubits=[0, 1, 3],
+        )
+        self.assertEqual(len(program.items), 3)
+        for item in program.items:
+            meas_register = next(r for r in item.circuit.cregs if r.name == "_meas")
+            self.assertEqual(len(meas_register), 3)
+
+    def test_passthrough_data_contains_meas_qubits(self):
+        gf = GateFolding()
+        program = gf.prepare(
+            self._gate_circuit(),
+            [SparsePauliOp("ZIII")],
+            None,
+            noise_factors=(1, 3),
+            extrapolator=["fallback"],
+            meas_qubits=[3, 1, 0],
+        )
+        passthrough = program.passthrough_data["qiskit_mitigation"][0]
+        self.assertEqual(passthrough["meas_qubits"], [0, 1, 3])
+        self.assertEqual(passthrough["circuit_num_qubits"], 4)
+
+    def test_raises_when_observable_qubit_is_not_measured(self):
+        with self.assertRaisesRegex(ValueError, r"observables act on qubits \[3\]"):
+            GateFolding().prepare(
+                self._gate_circuit(),
+                [SparsePauliOp("ZIII")],
+                None,
+                noise_factors=(1, 3),
+                extrapolator=["fallback"],
+                meas_qubits=[0, 1],
+            )
+
+    def test_raises_when_gate_qubit_is_not_measured(self):
+        with self.assertRaisesRegex(ValueError, r"Qubits \[1\].*not in ``meas_qubits``"):
+            GateFolding().prepare(
+                self._gate_circuit(),
+                [SparsePauliOp("ZIII")],
+                None,
+                noise_factors=(1, 3),
+                extrapolator=["fallback"],
+                meas_qubits=[0, 3],
+            )
+
+    def test_failed_validation_leaves_no_program_item(self):
+        """A rejected ``meas_qubits`` must not add items to a given quantum program."""
+        program = QuantumProgram(shots=4)
+        with self.assertRaises(ValueError):
+            GateFolding().prepare(
+                self._gate_circuit(),
+                [SparsePauliOp("ZIII")],
+                None,
+                noise_factors=(1, 3),
+                extrapolator=["fallback"],
+                quantum_program=program,
+                shots_per_randomization=4,
+                meas_qubits=[0],
+            )
+        self.assertEqual(len(program.items), 0)
+
+    def test_box_circuit_raises_when_gate_qubit_is_not_measured(self):
+        """``GateFolding._box_circuit`` (used to find the layers) validates ``meas_qubits`` too."""
+        with self.assertRaisesRegex(ValueError, "not in ``meas_qubits``"):
+            GateFolding._box_circuit(self._gate_circuit(), {}, [0])
 
     def test_meas_qubits_round_trips_through_passthrough(self):
         """``meas_qubits`` stored during ``prepare`` must be restored by

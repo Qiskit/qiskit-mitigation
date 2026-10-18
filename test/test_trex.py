@@ -58,10 +58,14 @@ def _fake_trex_item_result(
     }
 
 
-def _mock_mitigation_task(num_qubits: int = 2) -> MagicMock:
-    """Return a MagicMock that looks like a MitigationTask with a circuit."""
+def _mock_mitigation_task(num_qubits: int = 2, meas_qubits: list[int] | None = None) -> MagicMock:
+    """Return a MagicMock that looks like a MitigationTask with a circuit.
+
+    ``meas_qubits`` defaults to all the qubits of the circuit, like in a prepared task.
+    """
     task = MagicMock()
     task.circuit = _simple_circuit(num_qubits)
+    task.meas_qubits = list(range(num_qubits)) if meas_qubits is None else meas_qubits
     return task
 
 
@@ -224,6 +228,42 @@ class TestPrepareCalibrationCircuit(unittest.TestCase):
         self.assertIsInstance(item, SamplexItem)
         self.assertEqual(item.circuit.num_qubits, 1)
 
+    def test_meas_register_spans_all_qubits_by_default(self):
+        """Without ``meas_qubits`` the ``_meas`` register has a bit per qubit of the widest circuit."""
+        circuits = [_simple_circuit(2), _simple_circuit(4)]
+        item = TREX._prepare_calibration_circuit(circuits, num_randomizations=5)
+        meas_register = next(r for r in item.circuit.cregs if r.name == "_meas")
+        self.assertEqual(len(meas_register), 4)
+
+    def test_meas_register_spans_only_meas_qubits(self):
+        """With ``meas_qubits`` only these qubits are measured, in a register of matching width."""
+        circuits = [_simple_circuit(5)]
+        item = TREX._prepare_calibration_circuit(circuits, num_randomizations=5, meas_qubits=[1, 3])
+        meas_register = next(r for r in item.circuit.cregs if r.name == "_meas")
+        self.assertEqual(len(meas_register), 2)
+        # the circuit keeps its full width, so the qubit indices stay those of the mitigated circuits
+        self.assertEqual(item.circuit.num_qubits, 5)
+        measured = {
+            item.circuit.find_bit(qubit).index
+            for instruction in item.circuit.data
+            for qubit in instruction.qubits
+        }
+        self.assertEqual(measured, {1, 3})
+
+    def test_meas_qubits_order_matches_register_bits(self):
+        """Register bit ``i`` holds the measurement of ``meas_qubits[i]``."""
+        circuits = [_simple_circuit(4)]
+        item = TREX._prepare_calibration_circuit(
+            circuits, num_randomizations=5, meas_qubits=[0, 2, 3]
+        )
+        pairs = [
+            (item.circuit.find_bit(qubit).index, item.circuit.find_bit(clbit).index)
+            for instruction in item.circuit.data
+            if instruction.operation.name == "measure"
+            for qubit, clbit in zip(instruction.qubits, instruction.clbits, strict=True)
+        ]
+        self.assertEqual(sorted(pairs), [(0, 0), (2, 1), (3, 2)])
+
 
 # ---------------------------------------------------------------------------
 # TREX.prepare
@@ -293,6 +333,47 @@ class TestPrepare(unittest.TestCase):
         mock_qp.items = []
         returned = trex.prepare(num_randomizations=5, quantum_program=mock_qp)
         self.assertIs(returned, mock_qp)
+
+    def test_meas_qubits_is_union_of_the_tasks_meas_qubits(self):
+        """The calibration measures the sorted union of the ``meas_qubits`` of all the tasks."""
+        trex = TREX()
+        trex.tasks.append(_mock_mitigation_task(num_qubits=3, meas_qubits=[0, 2]))
+        trex.tasks.append(_mock_mitigation_task(num_qubits=5, meas_qubits=[2, 4]))
+        qp = QuantumProgram(shots=10)
+        trex.prepare(num_randomizations=2, quantum_program=qp)
+        self.assertEqual(trex.meas_qubits, [0, 2, 4])
+        self.assertEqual(trex.circuit_num_qubits, 5)
+
+    def test_calibration_circuit_measures_only_the_union(self):
+        """The calibration item has a ``_meas`` register of the size of the union."""
+        trex = TREX()
+        trex.tasks.append(_mock_mitigation_task(num_qubits=3, meas_qubits=[0, 2]))
+        trex.tasks.append(_mock_mitigation_task(num_qubits=5, meas_qubits=[2, 4]))
+        qp = QuantumProgram(shots=10)
+        trex.prepare(num_randomizations=2, quantum_program=qp)
+        meas_register = next(r for r in qp.items[-1].circuit.cregs if r.name == "_meas")
+        self.assertEqual(len(meas_register), 3)
+
+    def test_task_without_meas_qubits_falls_back_to_all_its_qubits(self):
+        """A task whose ``meas_qubits`` is ``None`` contributes every qubit of its circuit."""
+        trex = TREX()
+        task = _mock_mitigation_task(num_qubits=3)
+        task.meas_qubits = None
+        trex.tasks.append(task)
+        qp = QuantumProgram(shots=10)
+        trex.prepare(num_randomizations=2, quantum_program=qp)
+        self.assertEqual(trex.meas_qubits, [0, 1, 2])
+
+    def test_passthrough_data_contains_meas_qubits(self):
+        """The passthrough data stores what is needed to expand the calibration data."""
+        trex = TREX()
+        trex.tasks.append(_mock_mitigation_task(num_qubits=4, meas_qubits=[1, 3]))
+        qp = QuantumProgram(shots=10)
+        trex.prepare(num_randomizations=2, quantum_program=qp)
+        passthrough = qp.passthrough_data["qiskit_mitigation"][-1]
+        self.assertEqual(passthrough["mitigation"], "trex")
+        self.assertEqual(passthrough["meas_qubits"], [1, 3])
+        self.assertEqual(passthrough["circuit_num_qubits"], 4)
 
 
 # ---------------------------------------------------------------------------
