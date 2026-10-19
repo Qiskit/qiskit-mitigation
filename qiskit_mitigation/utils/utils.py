@@ -111,12 +111,12 @@ def get_measured_qubits(
     Measuring all of them guarantees that every twirled qubit is measured. The result can be passed as
     ``meas_qubits`` to :meth:`~.MitigationTask.prepare` and to :func:`find_combined_unique_layers`.
 
-    If any of the boxing options sets ``twirling_strategy="all"``, every qubit of the widest circuit is
+    If any of the boxing options sets ``twirling_strategy="all"``, every qubit of the circuits is
     returned, since in that case all qubits are boxed together with the measurements. A warning is
     emitted, because measuring all qubits means that no partial measurement is used.
 
     Args:
-        circuits: The circuits to find the measured qubits for.
+        circuits: The circuits to find the measured qubits for. All of them must have the same number of qubits.
         observables: The observables of each circuit. Must be the same length as ``circuits``.
         custom_boxing_options: The custom boxing options that will be used to box the circuits.
             Either a single dict for all circuits, or one per circuit.
@@ -126,11 +126,14 @@ def get_measured_qubits(
 
     Raises:
         ValueError: If the number of observables does not match the number of circuits.
+        ValueError: If the circuits do not all have the same number of qubits.
     """
     from qiskit_mitigation.mitigation_task import MitigationTask
 
     if len(observables) != len(circuits):
         raise ValueError("Number of observable arrays does not match number of circuits.")
+    if len({circuit.num_qubits for circuit in circuits}) > 1:
+        raise ValueError("All the circuits must have the same number of qubits.")
     if custom_boxing_options is None:
         options_list: Sequence[dict | None] = []
     elif isinstance(custom_boxing_options, dict):
@@ -143,7 +146,7 @@ def get_measured_qubits(
     ):
         warnings.warn(
             'The boxing options set ``twirling_strategy="all"``, which boxes and measures all '
-            "qubits, so all the qubits of the widest circuit are returned and no partial "
+            "qubits, so all the qubits of the circuits are returned and no partial "
             "measurement is used.",
             stacklevel=2,
         )

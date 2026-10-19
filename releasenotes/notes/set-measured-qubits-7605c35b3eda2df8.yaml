@@ -13,14 +13,18 @@ features:
   - |
     Added :func:`~qiskit_mitigation.get_measured_qubits`, which returns a set of qubits that is sufficient
     to measure given circuits and observables. Its result can be passed as ``meas_qubits`` to ``prepare``.
+    All the given circuits must have the same number of qubits, otherwise a ``ValueError`` is raised.
   - |
     Added a ``meas_qubits`` argument to :func:`~qiskit_mitigation.find_combined_unique_layers`. The measured
     qubits affect the boxing, so to find the same layers that are used in execution, pass the same
     ``meas_qubits`` to ``find_combined_unique_layers`` and to ``prepare``.
   - |
     When a :class:`~qiskit_mitigation.TREX` instance is used together with ``meas_qubits``, its calibration
-    circuit measures the union of the ``meas_qubits`` of all the tasks connected to it, and the learned
-    readout noise model is placed on the matching qubits of the circuit.
+    circuit measures the same ``meas_qubits``, and the learned readout noise model is placed on the matching
+    qubits of the circuit. All the tasks connected to the same ``TREX`` instance must be prepared with the
+    same ``meas_qubits``, otherwise a ``ValueError`` is raised. To learn different measurement layers, use
+    separate ``TREX`` instances. Tasks prepared without ``meas_qubits`` can still share a ``TREX`` instance,
+    whose calibration measures all the qubits of the widest circuit, as before.
   - |
     ``compute_expectation_value`` of :class:`~qiskit_mitigation.MitigationTask` and its equivalents in
     :class:`~qiskit_mitigation.PEC`, :class:`~qiskit_mitigation.PEA` and :class:`~qiskit_mitigation.GateFolding`
@@ -31,7 +35,8 @@ features:
 upgrade:
   - |
     The passthrough data that is saved by ``prepare`` now contains the ``meas_qubits`` and ``circuit_num_qubits``
-    fields. Programs that were prepared by an older version of ``qiskit-mitigation`` can still be loaded and
+    fields, which are ``None`` when ``meas_qubits`` is not given. Programs that were prepared by an older
+    version of ``qiskit-mitigation`` can still be loaded and
     postprocessed. Results of programs that were prepared with a ``meas_qubits`` subset can only be
     postprocessed correctly with a version that supports ``meas_qubits``.
 fixes:

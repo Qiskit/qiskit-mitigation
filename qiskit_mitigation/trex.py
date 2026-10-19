@@ -45,6 +45,10 @@ class TREX:
     calibration results are post processed into a measurement noise model, which is used to
     calculate scale factors that correct the expectation values computed by the connected
     mitigation tasks.
+
+    All the tasks connected to the same instance must be prepared with the same ``meas_qubits``, or
+    all of them without it, in which case the calibration measures all the qubits of the widest
+    circuit. To learn different measurement layers, use separate instances.
     """
 
     VERSION = "0.1"
@@ -57,6 +61,18 @@ class TREX:
         self._program_item_index = None
         self.meas_qubits: list[int] | None = None
         self.circuit_num_qubits: int | None = None
+
+    def _validate_meas_qubits(self, meas_qubits: list[int] | None) -> None:
+        """Validate that a new task has the same ``meas_qubits`` as the already connected tasks.
+
+        Raises:
+            ValueError: If ``meas_qubits`` differs from the one of the connected tasks.
+        """
+        if self.tasks and meas_qubits != self.tasks[0].meas_qubits:
+            raise ValueError(
+                "All the tasks that share a TREX instance must have the same ``meas_qubits``. "
+                "To learn different measurement layers, use separate TREX instances."
+            )
 
     def _register_task(self, mitigation_task: MitigationTask) -> None:
         """Connect a mitigation task to this TREX, so that its qubits are included in the calibration."""
@@ -131,20 +147,11 @@ class TREX:
                 "A TREX must be connected to at least one mitigation task to create a calibration task."
             )
         circuits = [task.circuit for task in self.tasks]
-        # Union of active (observable-support) qubit indices across all connected tasks.
-        # Falls back to all qubits of the circuit when meas_qubits is not yet set on a task.
-        self.meas_qubits = sorted(
-            {
-                q
-                for task in self.tasks
-                for q in (
-                    task.meas_qubits
-                    if task.meas_qubits is not None
-                    else range(task.circuit.num_qubits)
-                )
-            }
-        )
-        self.circuit_num_qubits = max(circuit.num_qubits for circuit in circuits)
+        # All the tasks have the same ``meas_qubits``. If it is ``None``, all the qubits of the
+        # widest circuit are measured and ``circuit_num_qubits`` stays ``None``, like before.
+        self.meas_qubits = self.tasks[0].meas_qubits
+        if self.meas_qubits is not None:
+            self.circuit_num_qubits = max(circuit.num_qubits for circuit in circuits)
         self._program_item_index = len(quantum_program.items)
         quantum_program.items.append(
             self._prepare_calibration_circuit(

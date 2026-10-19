@@ -196,6 +196,7 @@ class PEC(MitigationTask):
                 qubit with non-trivial instructions. Use :func:`~qiskit_mitigation.get_measured_qubits`
                 to compute such a set. To get the same measurement layers as the ones found by
                 :func:`~qiskit_mitigation.find_combined_unique_layers`, give both the same ``meas_qubits``.
+                All the tasks that share a ``trex`` must be given the same ``meas_qubits``, or none of them.
             noise_maps: A mapping between layer ref to a noise model to use for PEC mitigation
                 method. The dict might contain layers not present in the given circuit, but must contain all
                 the mitigated layers. Assumes that the unique layers used for noise learning were extracted
@@ -216,6 +217,7 @@ class PEC(MitigationTask):
 
         Raises:
             ValueError: If ``meas_qubits`` is not sufficient to measure the circuit and the observables.
+            ValueError: If ``trex`` is connected to tasks with different ``meas_qubits``.
         """
         if noise_maps is None:
             raise ValueError("noise_maps is missing")

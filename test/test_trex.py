@@ -69,11 +69,11 @@ def _fake_trex_item_result(
 def _mock_mitigation_task(num_qubits: int = 2, meas_qubits: list[int] | None = None) -> MagicMock:
     """Return a MagicMock that looks like a MitigationTask with a circuit.
 
-    ``meas_qubits`` defaults to all the qubits of the circuit, like in a prepared task.
+    ``meas_qubits`` defaults to ``None``, like in a task that was prepared without ``meas_qubits``.
     """
     task = MagicMock()
     task.circuit = _simple_circuit(num_qubits)
-    task.meas_qubits = list(range(num_qubits)) if meas_qubits is None else meas_qubits
+    task.meas_qubits = meas_qubits
     return task
 
 
@@ -169,6 +169,38 @@ class TestRegisterTask(unittest.TestCase):
         trex._register_task(task1)
         trex._register_task(task2)
         self.assertEqual(trex.tasks, [task1, task2])
+
+
+class TestValidateMeasQubits(unittest.TestCase):
+    """Tests for :meth:`TREX._validate_meas_qubits`."""
+
+    @staticmethod
+    def _trex_with_task(meas_qubits):
+        trex = TREX()
+        trex._register_task(_mock_mitigation_task(num_qubits=5, meas_qubits=meas_qubits))
+        return trex
+
+    def test_any_value_is_accepted_without_connected_tasks(self):
+        TREX()._validate_meas_qubits([0, 2])
+        TREX()._validate_meas_qubits(None)
+
+    def test_same_meas_qubits_are_accepted(self):
+        self._trex_with_task([0, 2])._validate_meas_qubits([0, 2])
+
+    def test_none_is_accepted_if_the_connected_tasks_have_none(self):
+        self._trex_with_task(None)._validate_meas_qubits(None)
+
+    def test_different_meas_qubits_raise(self):
+        with self.assertRaisesRegex(ValueError, "separate TREX instances"):
+            self._trex_with_task([0, 2])._validate_meas_qubits([0, 3])
+
+    def test_explicit_meas_qubits_on_a_trex_of_unspecified_tasks_raise(self):
+        with self.assertRaisesRegex(ValueError, "separate TREX instances"):
+            self._trex_with_task(None)._validate_meas_qubits([0, 1, 2, 3, 4])
+
+    def test_none_on_a_trex_of_explicit_tasks_raises(self):
+        with self.assertRaisesRegex(ValueError, "separate TREX instances"):
+            self._trex_with_task([0, 1, 2, 3, 4])._validate_meas_qubits(None)
 
 
 # ---------------------------------------------------------------------------
@@ -350,35 +382,32 @@ class TestPrepare(unittest.TestCase):
         returned = trex.prepare(num_randomizations=5, quantum_program=mock_qp)
         self.assertIs(returned, mock_qp)
 
-    def test_meas_qubits_is_union_of_the_tasks_meas_qubits(self):
-        """The calibration measures the sorted union of the ``meas_qubits`` of all the tasks."""
+    def test_meas_qubits_is_taken_from_the_tasks(self):
+        """The calibration measures the ``meas_qubits`` that all the tasks share, whatever their widths."""
         trex = TREX()
         trex.tasks.append(_mock_mitigation_task(num_qubits=3, meas_qubits=[0, 2]))
-        trex.tasks.append(_mock_mitigation_task(num_qubits=5, meas_qubits=[2, 4]))
+        trex.tasks.append(_mock_mitigation_task(num_qubits=5, meas_qubits=[0, 2]))
         qp = QuantumProgram(shots=10)
         trex.prepare(num_randomizations=2, quantum_program=qp)
-        self.assertEqual(trex.meas_qubits, [0, 2, 4])
+        self.assertEqual(trex.meas_qubits, [0, 2])
         self.assertEqual(trex.circuit_num_qubits, 5)
-
-    def test_calibration_circuit_measures_only_the_union(self):
-        """The calibration item has a ``_meas`` register of the size of the union."""
-        trex = TREX()
-        trex.tasks.append(_mock_mitigation_task(num_qubits=3, meas_qubits=[0, 2]))
-        trex.tasks.append(_mock_mitigation_task(num_qubits=5, meas_qubits=[2, 4]))
-        qp = QuantumProgram(shots=10)
-        trex.prepare(num_randomizations=2, quantum_program=qp)
         meas_register = next(r for r in qp.items[-1].circuit.cregs if r.name == "_meas")
-        self.assertEqual(len(meas_register), 3)
+        self.assertEqual(len(meas_register), 2)
 
-    def test_task_without_meas_qubits_falls_back_to_all_its_qubits(self):
-        """A task whose ``meas_qubits`` is ``None`` contributes every qubit of its circuit."""
+    def test_without_meas_qubits_all_qubits_of_the_widest_circuit_are_measured(self):
+        """If the tasks have no ``meas_qubits``, the calibration measures the widest circuit, as before."""
         trex = TREX()
-        task = _mock_mitigation_task(num_qubits=3)
-        task.meas_qubits = None
-        trex.tasks.append(task)
+        trex.tasks.append(_mock_mitigation_task(num_qubits=3))
+        trex.tasks.append(_mock_mitigation_task(num_qubits=5))
         qp = QuantumProgram(shots=10)
         trex.prepare(num_randomizations=2, quantum_program=qp)
-        self.assertEqual(trex.meas_qubits, [0, 1, 2])
+        self.assertIsNone(trex.meas_qubits)
+        self.assertIsNone(trex.circuit_num_qubits)
+        meas_register = next(r for r in qp.items[-1].circuit.cregs if r.name == "_meas")
+        self.assertEqual(len(meas_register), 5)
+        passthrough = qp.passthrough_data["qiskit_mitigation"][-1]
+        self.assertIsNone(passthrough["meas_qubits"])
+        self.assertIsNone(passthrough["circuit_num_qubits"])
 
     def test_passthrough_data_contains_meas_qubits(self):
         """The passthrough data stores what is needed to expand the calibration data."""
@@ -1114,13 +1143,32 @@ class TestTrexEndToEndWithPartialMeasurement(unittest.TestCase):
 
     SHOTS = 10
     RANDOMIZATIONS = 2
-    FLIP_RATES: ClassVar[dict[int, float]] = {0: 0.0, 1: 0.1, 2: 0.2, 4: 0.3}
+    FLIP_RATES: ClassVar[dict[int, float]] = {0: 0.0, 1: 0.1, 2: 0.2, 3: 0.4, 4: 0.3}
+
+    def _calibration(self, qubits):
+        """Return calibration data with a column per qubit, flipping according to FLIP_RATES."""
+        calibration = np.zeros((self.RANDOMIZATIONS, self.SHOTS, len(qubits)), dtype=bool)
+        for column, qubit in enumerate(qubits):
+            calibration[:, : round(self.FLIP_RATES[qubit] * self.SHOTS), column] = True
+        return calibration
+
+    @staticmethod
+    def _raw_trex_factor(calibration, columns):
+        """The TREX factor of a Z term, computed from the given columns of a raw calibration array."""
+        return 1 / np.mean(np.prod(1 - 2 * calibration[..., columns], axis=-1))
 
     def _result(self, program, trex, with_pauli_signs=False):
-        """Return the result of the program with all-zero data and the calibration of FLIP_RATES."""
-        calibration = np.zeros((self.RANDOMIZATIONS, self.SHOTS, len(trex.meas_qubits)), dtype=bool)
-        for column, qubit in enumerate(trex.meas_qubits):
-            calibration[:, : round(self.FLIP_RATES[qubit] * self.SHOTS), column] = True
+        """Return the result of the program with all-zero data and the calibration of FLIP_RATES.
+
+        The calibration has a column per qubit in ``trex.meas_qubits``, or per qubit of the
+        widest circuit if the TREX has no ``meas_qubits``.
+        """
+        calibration_width = len(
+            next(r for r in program.items[-1].circuit.cregs if r.name == "_meas")
+        )
+        calibration = self._calibration(
+            trex.meas_qubits if trex.meas_qubits is not None else range(calibration_width)
+        )
         item_results = []
         for item in program.items[:-1]:
             data = np.zeros((*item.shape, self.SHOTS, len(item.circuit.cregs[-1])), dtype=bool)
@@ -1145,47 +1193,133 @@ class TestTrexEndToEndWithPartialMeasurement(unittest.TestCase):
             for layer in layers
         }
 
-    def test_tasks_of_different_widths_read_their_own_calibration_columns(self):
-        """A 3-qubit and a 5-qubit task share one calibration measuring the union of their qubits."""
+    def _prepare_narrow_and_wide(self, trex, meas_qubits=None):
+        """Prepare a 3-qubit and a 5-qubit task with gates on qubits 1 and 2, sharing ``trex``."""
         narrow = QuantumCircuit(3)
-        narrow.sx(0)
+        narrow.sx(1)
         narrow.sx(2)
         wide = QuantumCircuit(5)
         wide.sx(1)
-        wide.sx(4)
-        trex = TREX()
+        wide.sx(2)
         program = MitigationTask().prepare(
             narrow,
-            [SparsePauliOp("ZIZ")],
+            [SparsePauliOp("ZZI")],  # Z on qubits 1 and 2
             None,
             shots_per_randomization=self.SHOTS,
             num_randomizations=self.RANDOMIZATIONS,
             trex=trex,
-            meas_qubits=[0, 2],
+            meas_qubits=meas_qubits,
         )
         program = MitigationTask().prepare(
             wide,
-            [SparsePauliOp("ZIIZI")],
+            [SparsePauliOp("IIIZI")],  # Z on qubit 1
             None,
             shots_per_randomization=self.SHOTS,
             num_randomizations=self.RANDOMIZATIONS,
             trex=trex,
-            meas_qubits=[1, 4],
+            meas_qubits=meas_qubits,
             quantum_program=program,
         )
         trex.prepare(self.RANDOMIZATIONS, program)
-        self.assertEqual(trex.meas_qubits, [0, 1, 2, 4])
+        return program
+
+    def test_tasks_of_different_widths_with_the_same_meas_qubits(self):
+        """A 3-qubit and a 5-qubit task with the same ``meas_qubits`` read their own qubits' columns."""
+        trex = TREX()
+        program = self._prepare_narrow_and_wide(trex, meas_qubits=[1, 2])
+        self.assertEqual(trex.meas_qubits, [1, 2])
         self.assertEqual(trex.circuit_num_qubits, 5)
 
         result = self._result(program, trex)
         narrow_task, wide_task = load_tasks_from_result(result)
-        # the calibration columns are the union [0, 1, 2, 4]; each task must pick its own qubits
         np.testing.assert_allclose(
-            narrow_task.postprocess(result).data.evs, [np.exp(2 * (0.0 + 0.2))]
+            narrow_task.postprocess(result).data.evs, [np.exp(2 * (0.1 + 0.2))]
+        )
+        np.testing.assert_allclose(wide_task.postprocess(result).data.evs, [np.exp(2 * 0.1)])
+
+    def test_tasks_of_different_widths_without_meas_qubits(self):
+        """Without ``meas_qubits`` the calibration measures the widest circuit and each task reads its qubits."""
+        trex = TREX()
+        program = self._prepare_narrow_and_wide(trex)
+        self.assertIsNone(trex.meas_qubits)
+        self.assertIsNone(trex.circuit_num_qubits)
+        calibration_register = next(r for r in program.items[-1].circuit.cregs if r.name == "_meas")
+        self.assertEqual(len(calibration_register), 5)
+
+        result = self._result(program, trex)
+        narrow_task, wide_task = load_tasks_from_result(result)
+        self.assertIsNone(narrow_task.meas_qubits)
+        self.assertIsNone(wide_task.meas_qubits)
+        np.testing.assert_allclose(
+            narrow_task.postprocess(result).data.evs, [np.exp(2 * (0.1 + 0.2))]
+        )
+        np.testing.assert_allclose(wide_task.postprocess(result).data.evs, [np.exp(2 * 0.1)])
+
+    def test_raw_calibration_array_wider_than_the_circuit_without_meas_qubits(self):
+        """The 5-qubit calibration array is used as is for a 3-qubit task, as it was before ``meas_qubits``."""
+        trex = TREX()
+        program = self._prepare_narrow_and_wide(trex)
+        result = self._result(program, trex)
+        narrow_task, wide_task = load_tasks_from_result(result)
+        calibration = self._calibration(range(5))
+        # the columns of the array are the qubits of the widest circuit
+        np.testing.assert_allclose(
+            narrow_task.postprocess(result[0], measure_noise_data=calibration).data.evs,
+            [self._raw_trex_factor(calibration, [1, 2])],
         )
         np.testing.assert_allclose(
-            wide_task.postprocess(result).data.evs, [np.exp(2 * (0.1 + 0.3))]
+            wide_task.postprocess(result[1], measure_noise_data=calibration).data.evs,
+            [self._raw_trex_factor(calibration, [1])],
         )
+
+    def test_raw_calibration_array_with_meas_qubits(self):
+        """With ``meas_qubits`` the columns of the raw calibration array are the shared ``meas_qubits``."""
+        trex = TREX()
+        program = self._prepare_narrow_and_wide(trex, meas_qubits=[1, 2])
+        result = self._result(program, trex)
+        narrow_task, wide_task = load_tasks_from_result(result)
+        calibration = self._calibration([1, 2])
+        # the columns of the array are the shared ``meas_qubits`` [1, 2]
+        np.testing.assert_allclose(
+            narrow_task.postprocess(result[0], measure_noise_data=calibration).data.evs,
+            [self._raw_trex_factor(calibration, [0, 1])],
+        )
+        np.testing.assert_allclose(
+            wide_task.postprocess(result[1], measure_noise_data=calibration).data.evs,
+            [self._raw_trex_factor(calibration, [0])],
+        )
+
+    def test_tasks_with_different_meas_qubits_cannot_share_a_trex(self):
+        trex = TREX()
+        circuit = QuantumCircuit(3)
+        circuit.sx(1)
+        program = MitigationTask().prepare(
+            circuit,
+            [SparsePauliOp("IZI")],
+            None,
+            shots_per_randomization=self.SHOTS,
+            num_randomizations=self.RANDOMIZATIONS,
+            trex=trex,
+            meas_qubits=[1],
+        )
+        for meas_qubits in (None, [1, 2]):
+            with (
+                self.subTest(meas_qubits=meas_qubits),
+                self.assertRaisesRegex(ValueError, "separate TREX instances"),
+            ):
+                MitigationTask().prepare(
+                    circuit,
+                    [SparsePauliOp("IZI")],
+                    None,
+                    shots_per_randomization=self.SHOTS,
+                    num_randomizations=self.RANDOMIZATIONS,
+                    trex=trex,
+                    meas_qubits=meas_qubits,
+                    quantum_program=program,
+                )
+        # the rejected tasks were not connected and left no item behind
+        self.assertEqual(len(trex.tasks), 1)
+        self.assertEqual(len(program.items), 1)
 
     def test_pec_with_trex_and_partial_measurement(self):
         circuit = QuantumCircuit(5)

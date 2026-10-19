@@ -1327,7 +1327,8 @@ class TestPrepareMeasQubitsValidation(unittest.TestCase):
         """Without ``meas_qubits`` every qubit is measured, whatever the observables are."""
         task = MitigationTask()
         task.prepare(self.circuit, self.obs, parameters=None)
-        self.assertEqual(task.meas_qubits, [0, 1, 2, 3, 4])
+        self.assertIsNone(task.meas_qubits)
+        self.assertIsNone(task.circuit_num_qubits)
         self.assertEqual(self._meas_register_width(task), 5)
 
     def test_explicit_meas_qubits_are_stored_sorted_without_duplicates(self):

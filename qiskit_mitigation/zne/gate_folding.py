@@ -301,6 +301,7 @@ class GateFolding(MitigationTask):
                 qubit with non-trivial instructions. Use :func:`~qiskit_mitigation.get_measured_qubits`
                 to compute such a set. To get the same measurement layers as the ones found by
                 :func:`~qiskit_mitigation.find_combined_unique_layers`, give both the same ``meas_qubits``.
+                All the tasks that share a ``trex`` must be given the same ``meas_qubits``, or none of them.
             folding_method: The technique to use to fold the 2-qubit gates to amplify the noise.
                 If the noise factor requires amplifying only a subset of the gates, then these
                 gates are selected according to the method:
@@ -329,6 +330,7 @@ class GateFolding(MitigationTask):
 
         Raises:
             ValueError: If ``meas_qubits`` is not sufficient to measure the circuit and the observables.
+            ValueError: If ``trex`` is connected to tasks with different ``meas_qubits``.
         """
         if folding_method not in ["random", "front", "back"]:
             raise ValueError(

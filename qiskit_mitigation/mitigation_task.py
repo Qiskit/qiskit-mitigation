@@ -568,9 +568,10 @@ class MitigationTask:
         self.shots_per_randomization = shots_per_randomization
         self.trex = trex
         self._active_qubits = get_active_qubits(circuit)
-        if meas_qubits is None:
-            self.meas_qubits = list(range(circuit.num_qubits))
-        else:
+        # When ``meas_qubits`` is not given, all the qubits are measured and both attributes stay ``None``
+        self.meas_qubits = None
+        self.circuit_num_qubits = None
+        if meas_qubits is not None:
             self.meas_qubits = validate_meas_qubits(
                 circuit, meas_qubits, custom_boxing_options, self._active_qubits
             )
@@ -582,7 +583,9 @@ class MitigationTask:
                     "Every qubit in the support of the observables must be measured. "
                     "Use ``get_measured_qubits`` to compute a sufficient set of qubits."
                 )
-        self.circuit_num_qubits = circuit.num_qubits
+            self.circuit_num_qubits = circuit.num_qubits
+        if trex is not None:
+            trex._validate_meas_qubits(self.meas_qubits)
 
     def _extract_item_data(
         self,
@@ -699,12 +702,14 @@ class MitigationTask:
                 qubit with non-trivial instructions. Use :func:`~qiskit_mitigation.get_measured_qubits`
                 to compute such a set. To get the same measurement layers as the ones found by
                 :func:`~qiskit_mitigation.find_combined_unique_layers`, give both the same ``meas_qubits``.
+                All the tasks that share a ``trex`` must be given the same ``meas_qubits``, or none of them.
 
         Returns:
             A :class:`~.QuantumProgram` that can be executed via Executor.
 
         Raises:
             ValueError: If ``meas_qubits`` is not sufficient to measure the circuit and the observables.
+            ValueError: If ``trex`` is connected to tasks with different ``meas_qubits``.
         """
         # add measurement twirls to the task if TREX is on
         if trex is not None:

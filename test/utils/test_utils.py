@@ -930,9 +930,16 @@ class TestGetMeasuredQubits(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "observable arrays"):
             get_measured_qubits([QuantumCircuit(2), QuantumCircuit(2)], [[SparsePauliOp("ZI")]])
 
-    def test_twirling_strategy_all_returns_every_qubit_of_the_widest_circuit(self):
-        circuits = [QuantumCircuit(2), QuantumCircuit(5)]
-        observables = [[SparsePauliOp("ZI")], [SparsePauliOp("IIIIZ")]]
+    def test_raises_when_circuits_have_different_widths(self):
+        with self.assertRaisesRegex(ValueError, "same number of qubits"):
+            get_measured_qubits(
+                [QuantumCircuit(2), QuantumCircuit(5)],
+                [[SparsePauliOp("ZI")], [SparsePauliOp("IIIIZ")]],
+            )
+
+    def test_twirling_strategy_all_returns_every_qubit_of_the_circuits(self):
+        circuits = [QuantumCircuit(5), QuantumCircuit(5)]
+        observables = [[SparsePauliOp("ZIIII")], [SparsePauliOp("IIIIZ")]]
         with self.assertWarnsRegex(UserWarning, "twirling_strategy"):
             result = get_measured_qubits(
                 circuits, observables, custom_boxing_options={"twirling_strategy": "all"}

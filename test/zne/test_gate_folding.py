@@ -1246,7 +1246,7 @@ class TestGateFoldingPartialSupport(unittest.TestCase):
             noise_factors=(1, 3),
             extrapolator=["fallback"],
         )
-        self.assertEqual(gf.meas_qubits, [0, 1, 2, 3])
+        self.assertIsNone(gf.meas_qubits)
         for item in program.items:
             meas_register = next(r for r in item.circuit.cregs if r.name == "_meas")
             self.assertEqual(len(meas_register), 4)
