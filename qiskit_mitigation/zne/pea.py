@@ -32,7 +32,7 @@ from samplomatic.quantum_program import (
 
 from qiskit_mitigation.mitigation_task import MitigationTask
 from qiskit_mitigation.trex import TREX
-from qiskit_mitigation.utils.meas_qubits import expand_meas_data_and_flips
+from qiskit_mitigation.utils.meas_qubits import expand_meas_data
 from qiskit_mitigation.zne.extrapolation import (
     ExtrapolatorType,
     _validate_noise_factors,
@@ -581,12 +581,10 @@ class PEA(MitigationTask):
             ) from ex
 
         # Expand compressed measurement data back to full-circuit width.
-        data, meas_flips = expand_meas_data_and_flips(
-            data,
-            item_result.get("measurement_flips._meas", None),
-            meas_qubits,
-            circuit_num_qubits,
-        )
+        data = expand_meas_data(data, meas_qubits, circuit_num_qubits)
+        meas_flips = item_result.get("measurement_flips._meas", None)
+        if meas_flips is not None:
+            meas_flips = expand_meas_data(meas_flips, meas_qubits, circuit_num_qubits)
 
         _validate_noise_factors(noise_factors, extrapolator)
 

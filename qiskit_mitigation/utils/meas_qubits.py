@@ -90,14 +90,16 @@ def validate_meas_qubits(
 
 def expand_meas_data(
     data: np.ndarray,
-    meas_qubits: Sequence[int],
-    circuit_num_qubits: int,
+    meas_qubits: Sequence[int] | None,
+    circuit_num_qubits: int | None,
 ) -> np.ndarray:
     """Expand compressed measurement data to full-circuit width by padding unmeasured qubits with zeros.
 
     The last axis of ``data`` contains one column per measured qubit (in the order given by
     ``meas_qubits``). This function returns an array with last-axis length ``circuit_num_qubits``
     where column ``meas_qubits[i]`` holds the original column ``i`` and all other columns are zero.
+    If neither ``meas_qubits`` nor ``circuit_num_qubits`` is given, all the qubits were measured and
+    the input ``data`` is returned unchanged.
 
     Args:
         data: Array with last axis of length ``len(meas_qubits)``.
@@ -107,34 +109,6 @@ def expand_meas_data(
     Returns:
         Array of the same dtype and all leading dimensions, with last axis length
         ``circuit_num_qubits``.
-    """
-    expanded = np.zeros((*data.shape[:-1], circuit_num_qubits), dtype=data.dtype)
-    expanded[..., list(meas_qubits)] = data
-    return expanded
-
-
-def expand_meas_data_and_flips(
-    data: np.ndarray,
-    meas_flips: np.ndarray | None,
-    meas_qubits: Sequence[int] | None,
-    circuit_num_qubits: int | None,
-) -> tuple[np.ndarray, np.ndarray | None]:
-    """Expand the measured data and the measurement flips of a partial measurement to full-circuit width.
-
-    This is the common first step of postprocessing the results of a partial measurement, so that
-    the qubit indices of the observables can be used without any remapping. If neither
-    ``meas_qubits`` nor ``circuit_num_qubits`` is given, all the qubits were measured and the inputs
-    are returned unchanged.
-
-    Args:
-        data: Measured data with a last axis of length ``len(meas_qubits)``.
-        meas_flips: Measurement flips with the same last axis as ``data``, or ``None``.
-        meas_qubits: Sorted list of circuit qubit indices that were measured.
-        circuit_num_qubits: Total number of qubits in the original circuit.
-
-    Returns:
-        A tuple ``(data, meas_flips)`` with both expanded to ``circuit_num_qubits`` columns.
-        ``meas_flips`` is ``None`` if it was ``None``.
 
     Raises:
         ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
@@ -145,8 +119,7 @@ def expand_meas_data_and_flips(
             "but only one was given."
         )
     if meas_qubits is None or circuit_num_qubits is None:
-        return data, meas_flips
-    data = expand_meas_data(data, meas_qubits, circuit_num_qubits)
-    if meas_flips is not None:
-        meas_flips = expand_meas_data(meas_flips, meas_qubits, circuit_num_qubits)
-    return data, meas_flips
+        return data
+    expanded = np.zeros((*data.shape[:-1], circuit_num_qubits), dtype=data.dtype)
+    expanded[..., list(meas_qubits)] = data
+    return expanded

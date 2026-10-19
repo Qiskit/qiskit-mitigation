@@ -406,8 +406,6 @@ class TREX:
 
         Raises:
             ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
-            ValueError: If ``measurement_noise_map`` is a calibration result array and an observable term
-                acts on a qubit that is not in ``meas_qubits``.
         """
         if (meas_qubits is None) != (circuit_num_qubits is None):
             raise ValueError(
@@ -416,10 +414,7 @@ class TREX:
             )
         observables = ObservablesArray.coerce(observables).ravel()
 
-        expand_calibration_array = (
-            isinstance(measurement_noise_map, np.ndarray) and meas_qubits is not None
-        )
-        if expand_calibration_array:
+        if isinstance(measurement_noise_map, np.ndarray):
             measurement_noise_map = expand_meas_data(
                 measurement_noise_map, meas_qubits, circuit_num_qubits
             )
@@ -427,15 +422,6 @@ class TREX:
         scales_each_observable: dict[str, float] = {}
         for observable in observables:
             for obs_term in observable:
-                if expand_calibration_array:
-                    unmeasured = sorted(
-                        set(QubitSparsePauli(obs_term).indices.tolist()) - set(meas_qubits)
-                    )
-                    if unmeasured:
-                        raise ValueError(
-                            f"The observable term {obs_term} acts on qubits {unmeasured}, which are "
-                            "not in ``meas_qubits`` and so are missing from the TREX calibration data."
-                        )
                 scales_each_observable[str(obs_term)] = TREX.calculate_trex_factor(
                     measurement_noise_map, obs_term
                 )

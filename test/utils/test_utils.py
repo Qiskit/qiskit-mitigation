@@ -26,7 +26,6 @@ from qiskit_mitigation import PEC, MitigationTask
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.utils.meas_qubits import (
     expand_meas_data,
-    expand_meas_data_and_flips,
     get_active_qubits,
     validate_meas_qubits,
 )
@@ -1012,38 +1011,18 @@ class TestExpandMeasData(unittest.TestCase):
             np.testing.assert_array_equal(expanded[..., meas_qubits], data)
             np.testing.assert_array_equal(expanded[..., [1, 3]], False)
 
-
-class TestExpandMeasDataAndFlips(unittest.TestCase):
-    """Tests for :func:`expand_meas_data_and_flips`."""
-
-    def test_data_and_flips_are_expanded_to_the_circuit_width(self):
-        data = np.array([[[True, False]]])
-        flips = np.array([[[False, True]]])
-        expanded_data, expanded_flips = expand_meas_data_and_flips(data, flips, [1, 3], 5)
-        np.testing.assert_array_equal(expanded_data, [[[False, True, False, False, False]]])
-        np.testing.assert_array_equal(expanded_flips, [[[False, False, False, True, False]]])
-
-    def test_missing_flips_stay_none(self):
-        expanded_data, expanded_flips = expand_meas_data_and_flips(
-            np.zeros((1, 1, 2), dtype=bool), None, [0, 2], 3
-        )
-        self.assertEqual(expanded_data.shape, (1, 1, 3))
-        self.assertIsNone(expanded_flips)
-
-    def test_full_measurement_returns_the_inputs_unchanged(self):
+    def test_full_measurement_returns_the_input_unchanged(self):
         data = np.zeros((1, 1, 3), dtype=bool)
-        flips = np.ones((1, 1, 3), dtype=bool)
-        result_data, result_flips = expand_meas_data_and_flips(data, flips, None, None)
+        result_data = expand_meas_data(data, None, None)
         self.assertIs(result_data, data)
-        self.assertIs(result_flips, flips)
 
     def test_raises_when_only_meas_qubits_is_given(self):
         with self.assertRaisesRegex(ValueError, "must be provided together"):
-            expand_meas_data_and_flips(np.zeros((1, 1)), None, [0], None)
+            expand_meas_data(np.zeros((1, 1)), [0], None)
 
     def test_raises_when_only_circuit_num_qubits_is_given(self):
         with self.assertRaisesRegex(ValueError, "must be provided together"):
-            expand_meas_data_and_flips(np.zeros((1, 1)), None, None, 2)
+            expand_meas_data(np.zeros((1, 1)), None, 2)
 
 
 class TestValidateMeasQubits(unittest.TestCase):

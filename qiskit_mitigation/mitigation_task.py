@@ -46,7 +46,7 @@ from qiskit_mitigation.utils.expectation_values import (
     executor_expectation_values,
 )
 from qiskit_mitigation.utils.meas_qubits import (
-    expand_meas_data_and_flips,
+    expand_meas_data,
     get_active_qubits,
     validate_meas_qubits,
 )
@@ -1045,12 +1045,10 @@ class MitigationTask:
 
         # Expand compressed measurement data back to full-circuit width, so that all downstream
         # postprocessing can use observable qubit indices without any remapping.
-        data, meas_flips = expand_meas_data_and_flips(
-            data,
-            item_result.get("measurement_flips._meas", None),
-            meas_qubits,
-            circuit_num_qubits,
-        )
+        data = expand_meas_data(data, meas_qubits, circuit_num_qubits)
+        meas_flips = item_result.get("measurement_flips._meas", None)
+        if meas_flips is not None:
+            meas_flips = expand_meas_data(meas_flips, meas_qubits, circuit_num_qubits)
 
         trex_scale_factors = (
             TREX.trex_factors_each_term(

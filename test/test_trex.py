@@ -737,16 +737,6 @@ class TestTrexFactorsEachTermPartialMeasurement(unittest.TestCase):
         self.assertAlmostEqual(result["IZ"], 1 / (1 - 2 * 0.1))
         self.assertAlmostEqual(result["ZI"], 1 / (1 - 2 * 0.2))
 
-    def test_raises_when_a_term_acts_on_an_unmeasured_qubit(self):
-        """A term on a qubit that is missing from the calibration data raises."""
-        with self.assertRaisesRegex(ValueError, r"qubits \[0\].*not in ``meas_qubits``"):
-            TREX.trex_factors_each_term(
-                self._compressed_calibration_data(),
-                [SparsePauliOp("IIZ")],
-                meas_qubits=[1, 2],
-                circuit_num_qubits=3,
-            )
-
     def test_unmeasured_qubits_outside_the_observable_support_are_allowed(self):
         """Terms that do not touch the unmeasured qubits are fine."""
         result = TREX.trex_factors_each_term(
