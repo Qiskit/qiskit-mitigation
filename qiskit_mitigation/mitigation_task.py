@@ -45,7 +45,7 @@ from qiskit_mitigation.utils.expectation_values import (
     _compute_single_term_exp_val_with_twirl_variance,
     executor_expectation_values,
 )
-from qiskit_mitigation.utils.meas_qubits import derive_meas_qubits, _expand_meas_data_and_flips
+from qiskit_mitigation.utils.meas_qubits import _expand_meas_data_and_flips, derive_meas_qubits
 from qiskit_mitigation.utils.measurement_bases import (
     _convert_pauli_basis,
     _identify_measure_basis,

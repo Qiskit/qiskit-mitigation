@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import copy
 import unittest
-import warnings
 
 import numpy as np
 from qiskit import QuantumCircuit

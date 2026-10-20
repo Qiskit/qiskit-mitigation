@@ -22,11 +22,11 @@ from qiskit import QuantumCircuit
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_mitigation.utils.meas_qubits import (
-    derive_meas_qubits,
     _expand_meas_data,
     _expand_meas_data_and_flips,
     _get_active_qubits,
     _get_observable_qubit_indices,
+    derive_meas_qubits,
 )
 
 
