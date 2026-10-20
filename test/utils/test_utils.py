@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import unittest
+import warnings
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -711,8 +712,8 @@ class TestFindCombinedUniqueLayersWithObservables(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "observables"):
             find_combined_unique_layers([self.circuit], observables=[self.observables] * 2)
 
-    def test_per_circuit_options_with_one_all_entry_raises(self):
-        with self.assertRaisesRegex(ValueError, "twirling_strategy"):
+    def test_per_circuit_options_with_one_all_entry_warns(self):
+        with self.assertWarns(UserWarning):
             find_combined_unique_layers(
                 [self.circuit, self.circuit],
                 custom_boxing_options=[{}, {"twirling_strategy": "all"}],

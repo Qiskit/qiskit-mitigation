@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 
 import numpy as np
@@ -77,23 +78,22 @@ def derive_meas_qubits(
     Args:
         circuit: The circuit that is going to be measured.
         observables: The observables whose expectation values are estimated on ``circuit``.
-        boxing_options: The boxing options given by the user. Used only to reject
-            ``twirling_strategy="all"``, which boxes every qubit and therefore cannot be combined
-            with trimmed measurements.
+        boxing_options: The boxing options given by the user. Used to warn when
+            ``twirling_strategy="all"`` is set, since that strategy boxes all qubits and
+            trimming measurements therefore has no effect.
 
     Returns:
         Sorted list of the qubit indices to measure.
 
     Raises:
-        ValueError: If ``boxing_options["twirling_strategy"]`` is ``"all"``.
         ValueError: If no qubit is active or observed.
     """
     if boxing_options is not None and boxing_options.get("twirling_strategy") == "all":
-        raise ValueError(
-            'Trimming the measurements cannot be combined with ``twirling_strategy="all"``, '
-            "since this strategy boxes all the qubits. Turn off the trimming "
-            "(``trim_measurements=False`` or no ``observables`` for the layer-finding functions) "
-            "or use another ``twirling_strategy``."
+        warnings.warn(
+            'Trimming the measurements has no effect with ``twirling_strategy="all"``, '
+            "since this strategy boxes all the qubits — all of them are active.",
+            UserWarning,
+            stacklevel=2,
         )
     meas_qubits = sorted(
         set(_get_active_qubits(circuit)) | set(_get_observable_qubit_indices(observables))

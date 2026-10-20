@@ -190,8 +190,7 @@ class PEC(MitigationTask):
             quantum_program: The quantum program to add an item for. If None, a new program will be created.
             trim_measurements: Whether to measure only the qubits that have instructions on them or
                 are in the support of the observables, instead of all the qubits of the circuit.
-                The measured qubits are available in ``meas_qubits`` after the call. Not supported together
-                with ``twirling_strategy="all"``.
+                The measured qubits are available in ``meas_qubits`` after the call.
 
                 .. warning::
                     Trimming changes the boxing of the circuit, so ``noise_maps`` must be learned on
@@ -217,8 +216,7 @@ class PEC(MitigationTask):
             A :class:`~.QuantumProgram` with PEC mitigated item that can be executed via Executor.
 
         Raises:
-            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed, or
-                ``custom_boxing_options`` set ``twirling_strategy="all"``.
+            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed.
         """
         if noise_maps is None:
             raise ValueError("noise_maps is missing")

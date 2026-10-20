@@ -492,8 +492,7 @@ class MitigationTask:
             trim_measurements: Whether to measure only the active and observed qubits.
 
         Raises:
-            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed, or
-                ``custom_boxing_options`` set ``twirling_strategy="all"``.
+            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed.
         """
         # save variables in the class
         self.circuit = circuit
@@ -620,8 +619,7 @@ class MitigationTask:
             Unique boxed layers of the given circuit.
 
         Raises:
-            ValueError: If ``observables`` is given and no qubit is active or observed, or
-                ``custom_boxing_options`` set ``twirling_strategy="all"``.
+            ValueError: If ``observables`` is given and no qubit is active or observed.
         """
         custom_boxing_options = (
             {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
@@ -680,7 +678,6 @@ class MitigationTask:
                 are in the support of the observables, instead of all the qubits of the circuit.
                 The measured qubits are available in ``meas_qubits`` after the call. The results
                 are expanded back to the full circuit width before post-processing.
-                Not supported together with ``twirling_strategy="all"``.
 
                 .. warning::
                     Trimming changes the boxing of the circuit. To use noise learned for
@@ -695,8 +692,7 @@ class MitigationTask:
             A :class:`~.QuantumProgram` that can be executed via Executor.
 
         Raises:
-            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed, or
-                ``custom_boxing_options`` set ``twirling_strategy="all"``.
+            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed.
         """
         # add measurement twirls to the task if TREX is on
         if trex is not None:

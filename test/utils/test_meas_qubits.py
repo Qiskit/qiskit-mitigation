@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import unittest
+import warnings
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -103,11 +104,19 @@ class TestDeriveMeasQubits(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no qubit is active or observed"):
             derive_meas_qubits(QuantumCircuit(3), [SparsePauliOp("III")])
 
-    def test_twirling_strategy_all_raises(self):
-        with self.assertRaisesRegex(ValueError, "twirling_strategy"):
+    def test_twirling_strategy_all_warns(self):
+        with self.assertWarns(UserWarning):
             derive_meas_qubits(
                 self.circuit, [SparsePauliOp("IIIIIZ")], {"twirling_strategy": "all"}
             )
+
+    def test_twirling_strategy_all_warn_message(self):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            derive_meas_qubits(
+                self.circuit, [SparsePauliOp("IIIIIZ")], {"twirling_strategy": "all"}
+            )
+        self.assertIn("twirling_strategy", str(w[0].message))
 
     def test_other_boxing_options_are_accepted(self):
         options = {"twirling_strategy": "active", "inject_noise_targets": "all"}

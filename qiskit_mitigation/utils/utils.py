@@ -138,7 +138,7 @@ def find_combined_unique_layers(
         ValueError: If the length of ``mitigation_types``, ``custom_boxing_options`` or
             ``observables`` does not match the number of circuits.
         ValueError: If ``observables`` is given and, for some circuit, no qubit is active or
-            observed, or the boxing options set ``twirling_strategy="all"``.
+            observed.
     """
     from qiskit_mitigation.mitigation_task import MitigationTask
 

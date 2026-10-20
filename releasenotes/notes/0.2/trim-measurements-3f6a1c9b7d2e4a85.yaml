@@ -14,8 +14,9 @@ features:
     calibration measures the qubits ``0`` to ``m``, where ``m`` is the highest qubit measured by
     any of the tasks. A task that does not trim its measurements contributes all of its qubits.
 
-    Trimming the measurements is not supported together with ``twirling_strategy="all"``, and
-    raises a ``ValueError``.
+    When ``twirling_strategy="all"`` is combined with ``trim_measurements=True``, a
+    ``UserWarning`` is issued because all qubits are active under that strategy and trimming
+    therefore has no effect.
   - |
     Added the ``observables`` argument to
     :func:`~qiskit_mitigation.find_combined_unique_layers` and to ``find_unique_layers`` of the

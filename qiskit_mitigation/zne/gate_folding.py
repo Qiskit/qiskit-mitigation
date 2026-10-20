@@ -296,7 +296,6 @@ class GateFolding(MitigationTask):
             trim_measurements: Whether to measure only the qubits that have instructions on them or
                 are in the support of the observables, instead of all the qubits of the circuit.
                 The measured qubits are available in ``meas_qubits`` after the call.
-                Not supported together with ``twirling_strategy="all"``.
             folding_method: The technique to use to fold the 2-qubit gates to amplify the noise.
                 If the noise factor requires amplifying only a subset of the gates, then these
                 gates are selected according to the method:
@@ -324,8 +323,7 @@ class GateFolding(MitigationTask):
             A :class:`~.QuantumProgram` with GateFolding mitigated item that can be executed via Executor.
 
         Raises:
-            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed, or
-                ``custom_boxing_options`` set ``twirling_strategy="all"``.
+            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed.
         """
         if folding_method not in ["random", "front", "back"]:
             raise ValueError(

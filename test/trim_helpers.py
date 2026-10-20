@@ -319,27 +319,30 @@ class TrimMeasurementsTestsMixin:
             QuantumCircuit(3), [SparsePauliOp("III")], "no qubit is active"
         )
 
-    def test_twirling_strategy_all_raises(self):
-        self._check_prepare_fails_cleanly(
-            eigenstate_circuit(),
-            [SparsePauliOp("IIIZ")],
-            "twirling_strategy",
-            custom_boxing_options={"twirling_strategy": "all"},
-        )
+    def test_twirling_strategy_all_warns(self):
+        """``twirling_strategy="all"`` with trimming now warns instead of raising."""
+        with self.assertWarns(UserWarning):
+            self._prepare(
+                eigenstate_circuit(),
+                [SparsePauliOp("IIIZ")],
+                trim=True,
+                custom_boxing_options={"twirling_strategy": "all"},
+            )
 
     def test_failed_prepare_does_not_widen_the_trex_calibration(self):
         """A task that failed to prepare must not widen the calibration of the others."""
         trex = TREX()
         wide = QuantumCircuit(8)
         wide.x(7)
+        # Use an all-identity observable on a circuit with no instructions to force the
+        # "no qubit is active or observed" error, which still raises.
         with self.assertRaises(ValueError):
             self._prepare(
-                wide,
-                [SparsePauliOp("Z" + "I" * 7)],
+                QuantumCircuit(8),
+                [SparsePauliOp("I" * 8)],
                 trim=True,
                 trex=trex,
                 noise_maps={},
-                custom_boxing_options={"twirling_strategy": "all"},
             )
         self.assertEqual(trex.tasks, [])
         _, program = self._prepare(eigenstate_circuit(), self.OBSERVABLES, trim=True, trex=trex)

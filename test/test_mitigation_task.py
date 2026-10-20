@@ -1294,8 +1294,8 @@ class TestFindUniqueLayersWithObservables(unittest.TestCase):
                 QuantumCircuit(3), observables=[SparsePauliOp("III")]
             )
 
-    def test_twirling_strategy_all_raises(self):
-        with self.assertRaisesRegex(ValueError, "twirling_strategy"):
+    def test_twirling_strategy_all_warns(self):
+        with self.assertWarns(UserWarning):
             MitigationTask().find_unique_layers(
                 self.circuit,
                 custom_boxing_options={"twirling_strategy": "all"},
