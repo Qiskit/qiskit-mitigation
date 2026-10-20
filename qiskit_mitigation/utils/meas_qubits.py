@@ -23,7 +23,7 @@ from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import SparsePauliOp
 
 
-def get_active_qubits(circuit: QuantumCircuit) -> list[int]:
+def _get_active_qubits(circuit: QuantumCircuit) -> list[int]:
     """Return the sorted indices of the qubits that have non-trivial instructions on them.
 
     A qubit is active if any instruction other than a barrier or a delay acts on it. Final
@@ -40,7 +40,7 @@ def get_active_qubits(circuit: QuantumCircuit) -> list[int]:
     return [index for index, qubit in enumerate(stripped_circuit.qubits) if qubit not in idle_wires]
 
 
-def get_observable_qubit_indices(
+def _get_observable_qubit_indices(
     observables: ObservablesArray | Sequence[SparsePauliOp],
 ) -> list[int]:
     """Return the sorted circuit qubit indices in the support of the observables.
@@ -96,7 +96,7 @@ def derive_meas_qubits(
             "or use another ``twirling_strategy``."
         )
     meas_qubits = sorted(
-        set(get_active_qubits(circuit)) | set(get_observable_qubit_indices(observables))
+        set(_get_active_qubits(circuit)) | set(_get_observable_qubit_indices(observables))
     )
     if not meas_qubits:
         raise ValueError(
@@ -106,7 +106,7 @@ def derive_meas_qubits(
     return meas_qubits
 
 
-def expand_meas_data(
+def _expand_meas_data(
     data: np.ndarray,
     meas_qubits: Sequence[int] | None,
     circuit_num_qubits: int | None,
@@ -143,7 +143,7 @@ def expand_meas_data(
     return expanded
 
 
-def expand_meas_data_and_flips(
+def _expand_meas_data_and_flips(
     data: np.ndarray,
     meas_flips: np.ndarray | None,
     meas_qubits: Sequence[int] | None,
@@ -151,7 +151,7 @@ def expand_meas_data_and_flips(
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Expand compressed measurement data and its measurement flips to full-circuit width.
 
-    Both arrays are expanded with :func:`expand_meas_data`. If ``meas_qubits`` and
+    Both arrays are expanded with :func:`_expand_meas_data`. If ``meas_qubits`` and
     ``circuit_num_qubits`` are ``None`` the inputs are returned unchanged.
 
     Args:
@@ -166,7 +166,7 @@ def expand_meas_data_and_flips(
     Raises:
         ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
     """
-    data = expand_meas_data(data, meas_qubits, circuit_num_qubits)
+    data = _expand_meas_data(data, meas_qubits, circuit_num_qubits)
     if meas_flips is not None:
-        meas_flips = expand_meas_data(meas_flips, meas_qubits, circuit_num_qubits)
+        meas_flips = _expand_meas_data(meas_flips, meas_qubits, circuit_num_qubits)
     return data, meas_flips

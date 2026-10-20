@@ -22,59 +22,59 @@ from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_mitigation.utils.meas_qubits import (
     derive_meas_qubits,
-    expand_meas_data,
-    expand_meas_data_and_flips,
-    get_active_qubits,
-    get_observable_qubit_indices,
+    _expand_meas_data,
+    _expand_meas_data_and_flips,
+    _get_active_qubits,
+    _get_observable_qubit_indices,
 )
 
 
 class TestGetActiveQubits(unittest.TestCase):
-    """Tests for :func:`get_active_qubits`."""
+    """Tests for :func:`_get_active_qubits`."""
 
     def test_gates_make_qubits_active(self):
         qc = QuantumCircuit(5)
         qc.x(0)
         qc.cx(3, 4)
-        self.assertEqual(get_active_qubits(qc), [0, 3, 4])
+        self.assertEqual(_get_active_qubits(qc), [0, 3, 4])
 
     def test_empty_circuit_has_no_active_qubits(self):
-        self.assertEqual(get_active_qubits(QuantumCircuit(3)), [])
+        self.assertEqual(_get_active_qubits(QuantumCircuit(3)), [])
 
     def test_barrier_and_delay_do_not_activate(self):
         qc = QuantumCircuit(3)
         qc.barrier()
         qc.delay(100, 1)
         qc.x(2)
-        self.assertEqual(get_active_qubits(qc), [2])
+        self.assertEqual(_get_active_qubits(qc), [2])
 
     def test_final_measurements_do_not_activate(self):
         qc = QuantumCircuit(3, 3)
         qc.x(0)
         qc.measure([0, 1, 2], [0, 1, 2])
-        self.assertEqual(get_active_qubits(qc), [0])
+        self.assertEqual(_get_active_qubits(qc), [0])
 
     def test_input_circuit_is_not_modified(self):
         qc = QuantumCircuit(2, 2)
         qc.x(0)
         qc.measure([0, 1], [0, 1])
-        get_active_qubits(qc)
+        _get_active_qubits(qc)
         self.assertEqual(qc.count_ops().get("measure"), 2)
 
 
 class TestGetObservableQubitIndices(unittest.TestCase):
-    """Tests for :func:`get_observable_qubit_indices`."""
+    """Tests for :func:`_get_observable_qubit_indices`."""
 
     def test_union_over_all_observables_and_terms(self):
         observables = [SparsePauliOp(["IIIZ", "IXII"]), SparsePauliOp("ZIII")]
-        self.assertEqual(get_observable_qubit_indices(observables), [0, 2, 3])
+        self.assertEqual(_get_observable_qubit_indices(observables), [0, 2, 3])
 
     def test_identity_has_no_support(self):
-        self.assertEqual(get_observable_qubit_indices([SparsePauliOp("III")]), [])
+        self.assertEqual(_get_observable_qubit_indices([SparsePauliOp("III")]), [])
 
     def test_accepts_observables_array(self):
         observables = ObservablesArray.coerce([SparsePauliOp("IZI")])
-        self.assertEqual(get_observable_qubit_indices(observables), [1])
+        self.assertEqual(_get_observable_qubit_indices(observables), [1])
 
 
 class TestDeriveMeasQubits(unittest.TestCase):
@@ -122,39 +122,39 @@ class TestDeriveMeasQubits(unittest.TestCase):
 
 
 class TestExpandMeasData(unittest.TestCase):
-    """Tests for :func:`expand_meas_data` and :func:`expand_meas_data_and_flips`."""
+    """Tests for :func:`_expand_meas_data` and :func:`_expand_meas_data_and_flips`."""
 
     def test_columns_land_on_their_circuit_qubit(self):
         data = np.array([[[True, False, True]]])  # columns of qubits 1, 3 and 4
-        expanded = expand_meas_data(data, [1, 3, 4], 6)
+        expanded = _expand_meas_data(data, [1, 3, 4], 6)
         np.testing.assert_array_equal(expanded, [[[False, True, False, False, True, False]]])
 
     def test_dtype_and_leading_axes_are_kept(self):
         data = np.ones((2, 3, 4, 2), dtype=bool)
-        expanded = expand_meas_data(data, [0, 5], 6)
+        expanded = _expand_meas_data(data, [0, 5], 6)
         self.assertEqual(expanded.shape, (2, 3, 4, 6))
         self.assertEqual(expanded.dtype, bool)
 
     def test_none_returns_the_input_unchanged(self):
         data = np.ones((1, 1, 2, 3), dtype=bool)
-        self.assertIs(expand_meas_data(data, None, None), data)
+        self.assertIs(_expand_meas_data(data, None, None), data)
 
     def test_only_one_argument_raises(self):
         data = np.ones((1, 2), dtype=bool)
         with self.assertRaises(ValueError):
-            expand_meas_data(data, [0, 1], None)
+            _expand_meas_data(data, [0, 1], None)
         with self.assertRaises(ValueError):
-            expand_meas_data(data, None, 4)
+            _expand_meas_data(data, None, 4)
 
     def test_data_and_flips_are_both_expanded(self):
         data = np.ones((1, 2), dtype=bool)
         flips = np.zeros((1, 2), dtype=bool)
-        new_data, new_flips = expand_meas_data_and_flips(data, flips, [1, 2], 4)
+        new_data, new_flips = _expand_meas_data_and_flips(data, flips, [1, 2], 4)
         np.testing.assert_array_equal(new_data, [[False, True, True, False]])
         np.testing.assert_array_equal(new_flips, [[False, False, False, False]])
 
     def test_missing_flips_stay_none(self):
-        _, flips = expand_meas_data_and_flips(np.ones((1, 2), dtype=bool), None, [0, 1], 4)
+        _, flips = _expand_meas_data_and_flips(np.ones((1, 2), dtype=bool), None, [0, 1], 4)
         self.assertIsNone(flips)
 
 
