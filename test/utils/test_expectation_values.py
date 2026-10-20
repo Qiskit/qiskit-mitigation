@@ -1297,11 +1297,18 @@ class TestFindMeasureBasisToObservableMapping(unittest.TestCase):
         result = _find_measure_basis_to_observable_mapping([obs], bases)
 
         self.assertEqual(len(result), 2)
-        # Each term should be mapped to its commuting basis
-        for _, obs_list in result.items():
-            self.assertEqual(len(obs_list), 1)
-            if obs_list[0] is not None:
-                self.assertEqual(len(obs_list[0].paulis), 1)
+        zi_basis = Pauli("ZI")
+        xi_basis = Pauli("XI")
+
+        # ZI term commutes with ZI basis and lands there first
+        self.assertIsNotNone(result[zi_basis][0])
+        self.assertEqual(len(result[zi_basis][0].paulis), 1)
+        self.assertEqual(result[zi_basis][0].paulis[0], Pauli("ZI"))
+
+        # XI term commutes with XI basis and lands there
+        self.assertIsNotNone(result[xi_basis][0])
+        self.assertEqual(len(result[xi_basis][0].paulis), 1)
+        self.assertEqual(result[xi_basis][0].paulis[0], Pauli("XI"))
 
     def test_basis_as_int_list(self):
         """Test with basis as list of integers."""
@@ -1364,15 +1371,19 @@ class TestFindMeasureBasisToObservableMapping(unittest.TestCase):
         bases = ["ZZZ", "XXX"]
         result = _find_measure_basis_to_observable_mapping([obs], bases)
 
-        # ZZI and IZZ should map to ZZZ, XII should map to XXX
         z_basis = Pauli("ZZZ")
         x_basis = Pauli("XXX")
 
+        # ZZI and IZZ commute with ZZZ and land there
         self.assertIsNotNone(result[z_basis][0])
         self.assertEqual(len(result[z_basis][0].paulis), 2)
+        self.assertIn(Pauli("ZZI"), result[z_basis][0].paulis)
+        self.assertIn(Pauli("IZZ"), result[z_basis][0].paulis)
 
+        # XII commutes with XXX and lands there
         self.assertIsNotNone(result[x_basis][0])
         self.assertEqual(len(result[x_basis][0].paulis), 1)
+        self.assertEqual(result[x_basis][0].paulis[0], Pauli("XII"))
 
     def test_identity_terms(self):
         """Test handling of identity terms."""
@@ -1397,19 +1408,27 @@ class TestFindMeasureBasisToObservableMapping(unittest.TestCase):
 
     def test_y_pauli_terms(self):
         """Test handling of Y Pauli terms which involve both X and Z."""
-        # Y commutes with Y, Z commutes with Z
+        # YI and IZ both qubit-wise commute with the YI basis (IZ commutes because I commutes
+        # with anything), so both terms land in the first matching basis (YI).
+        # This exercises the Y-qubit commutation check: prior to the fix, np.dot on boolean
+        # arrays saturated (True+True==True), making True%2==0 False and wrongly rejecting YI.
         obs = SparsePauliOp(["YI", "IZ"], [1.0, 2.0])
         bases = ["YI", "IZ"]
         result = _find_measure_basis_to_observable_mapping([obs], bases)
 
-        # YI should map to YI basis, IZ should map to IZ basis
         y_basis = Pauli("YI")
         z_basis = Pauli("IZ")
 
+        # YI basis: gets both terms (both commute with YI)
+        self.assertEqual(len(result[y_basis]), 1)
         self.assertIsNotNone(result[y_basis][0])
-        self.assertEqual(len(result[y_basis][0].paulis), 1)
-        self.assertIsNotNone(result[z_basis][0])
-        self.assertEqual(len(result[z_basis][0].paulis), 1)
+        self.assertEqual(len(result[y_basis][0].paulis), 2)
+        self.assertIn(Pauli("YI"), result[y_basis][0].paulis)
+        self.assertIn(Pauli("IZ"), result[y_basis][0].paulis)
+
+        # IZ basis: gets None (both terms already claimed by YI basis)
+        self.assertEqual(len(result[z_basis]), 1)
+        self.assertIsNone(result[z_basis][0])
 
     def test_observable_with_complex_coefficients(self):
         """Test with observable having complex coefficients."""
@@ -1463,9 +1482,25 @@ class TestFindMeasureBasisToObservableMapping(unittest.TestCase):
         result = _find_measure_basis_to_observable_mapping([obs1, obs2], bases)
 
         z_basis = Pauli("ZZ")
-        # Both observables have ZZ term, should be in first basis
+        x_basis = Pauli("XX")
+        xi_basis = Pauli("XI")
+
+        # Both observables have ZZ, lands in the ZZ basis for each
         self.assertIsNotNone(result[z_basis][0])
+        self.assertEqual(result[z_basis][0].paulis[0], Pauli("ZZ"))
         self.assertIsNotNone(result[z_basis][1])
+        self.assertEqual(result[z_basis][1].paulis[0], Pauli("ZZ"))
+
+        # obs1's XX lands in XX basis; obs2's XI also commutes with XX (I commutes with
+        # anything, X commutes with X), so it lands there too — XI basis ends up empty
+        self.assertIsNotNone(result[x_basis][0])
+        self.assertEqual(result[x_basis][0].paulis[0], Pauli("XX"))
+        self.assertIsNotNone(result[x_basis][1])
+        self.assertEqual(result[x_basis][1].paulis[0], Pauli("XI"))
+
+        # XI basis: both terms already claimed by earlier bases → both None
+        self.assertIsNone(result[xi_basis][0])
+        self.assertIsNone(result[xi_basis][1])
 
     def test_basis_order_matters(self):
         """Test that the order of bases affects which basis is chosen."""
