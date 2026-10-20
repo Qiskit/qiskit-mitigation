@@ -1,7 +1,5 @@
 ---
 fixes:
   - |
-    Fixed a bug in the expectation value calculation where the commutation check
-    between observable terms and measurement bases (notably for terms containing
-    ``Y``) was computed incorrectly on boolean arrays. This could cause no
-    measurement basis to be found for a term, or a wrong basis to be assigned to it.
+    Fixed a bug in the commutation check between observable terms and measurement bases 
+    (notably for terms containing ``Y``) which caused incorrect computations in some scenarios.
