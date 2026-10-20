@@ -1055,6 +1055,8 @@ class GateFolding(MitigationTask):
         return PubResult(data=data_bin, metadata={"selected_extrapolators": selected_extrapolators})
 
 
+# Both versions share the same postprocessor. Version 0.2 exists because older releases
+# do not support it.
 VERSION_TO_POSTPROCESSOR = {
     "0.1": GateFolding.compute_expectation_value_gate_folding,
     "0.2": GateFolding.compute_expectation_value_gate_folding,

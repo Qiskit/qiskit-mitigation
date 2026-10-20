@@ -762,6 +762,8 @@ class PEC(MitigationTask):
         return PubResult(data=data_bin)
 
 
+# Both versions share the same postprocessor. Version 0.2 exists because older releases
+# do not support it.
 VERSION_TO_POSTPROCESSOR = {
     "0.1": PEC.compute_expectation_value_pec,
     "0.2": PEC.compute_expectation_value_pec,
