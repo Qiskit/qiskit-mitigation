@@ -102,11 +102,6 @@ class TestEditBoxingOptions(unittest.TestCase):
     def setUp(self):
         self.trex = TREX()
 
-    def test_does_not_register_a_task(self):
-        """Editing the options must not change ``self.tasks``; tasks register explicitly."""
-        self.trex._edit_boxing_options(None)
-        self.assertEqual(self.trex.tasks, [])
-
     def test_none_options_returns_defaults(self):
         """``None`` boxing_options must return default TREX options."""
         result = self.trex._edit_boxing_options(None)

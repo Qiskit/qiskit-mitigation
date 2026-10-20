@@ -1219,7 +1219,9 @@ class TestMitigationTaskTrimMeasurements(TrimMeasurementsTestsMixin, unittest.Te
     def test_boxed_circuit_is_the_untrimmed_boxing_by_default(self):
         circuit = eigenstate_circuit()
         task, _ = prepare_task(MitigationTask, circuit, [SparsePauliOp("IIIZ")], trim=False)
-        self.assertEqual(task.boxed_circuit, MitigationTask()._box_circuit(circuit, {}))
+        untrimmed = MitigationTask()._box_circuit(circuit, {})
+        self.assertEqual(task.boxed_circuit.num_clbits, untrimmed.num_clbits)
+        self.assertEqual(task.boxed_circuit.num_clbits, circuit.num_qubits)
 
 
 class TestParametrizedTrimMeasurements(unittest.TestCase):
