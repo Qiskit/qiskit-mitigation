@@ -41,6 +41,7 @@ from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.utils.expectation_values import (
     _compute_single_term_exp_val_with_twirl_variance,
 )
+from qiskit_mitigation.utils.meas_qubits import _expand_meas_data_and_flips
 from qiskit_mitigation.utils.measurement_bases import (
     _convert_pauli_basis,
     _identify_measure_basis,
@@ -193,6 +194,7 @@ class GateFolding(MitigationTask):
         cls,
         circuit: QuantumCircuit,
         boxing_options: dict | None,
+        meas_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -205,6 +207,8 @@ class GateFolding(MitigationTask):
         Args:
             circuit: The circuit to group into boxes.
             boxing_options: Dictionary of boxing options. If ``None``, default boxing options are used.
+            meas_qubits: Circuit qubit indices to measure. Forwarded to the base implementation.
+                If ``None``, all qubits are measured.
 
         Returns:
             The boxed circuit.
@@ -217,7 +221,7 @@ class GateFolding(MitigationTask):
         if boxing_options is None:
             boxing_options = {"enable_gates": False}
 
-        return super()._box_circuit(circuit, boxing_options)
+        return super()._box_circuit(circuit, boxing_options, meas_qubits)
 
     def _extract_items_list_data(
         self,
@@ -257,6 +261,7 @@ class GateFolding(MitigationTask):
         broadcast_obs_and_params: bool = False,
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
+        trim_measurements: bool = False,
         *,
         folding_method: Literal["random", "front", "back"] = "random",
         noise_factors: Sequence[float | int] = (1, 3, 5),
@@ -288,6 +293,9 @@ class GateFolding(MitigationTask):
             trex: A TREX mitigation instance that will be used to mitigate readout errors.
             quantum_program: The quantum program to add an item for. If None, a new program will
                 be created.
+            trim_measurements: Whether to measure only the qubits that have instructions on them or
+                are in the support of the observables, instead of all the qubits of the circuit.
+                The measured qubits are available in ``meas_qubits`` after the call.
             folding_method: The technique to use to fold the 2-qubit gates to amplify the noise.
                 If the noise factor requires amplifying only a subset of the gates, then these
                 gates are selected according to the method:
@@ -313,6 +321,9 @@ class GateFolding(MitigationTask):
 
         Returns:
             A :class:`~.QuantumProgram` with GateFolding mitigated item that can be executed via Executor.
+
+        Raises:
+            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed.
         """
         if folding_method not in ["random", "front", "back"]:
             raise ValueError(
@@ -326,7 +337,7 @@ class GateFolding(MitigationTask):
                     "projection operators. You can decompose into pauli operators if the "
                     "exponential cost is acceptable."
                 )
-            custom_boxing_options = trex._edit_boxing_options(self, custom_boxing_options)
+            custom_boxing_options = trex._edit_boxing_options(custom_boxing_options)
 
         # save variables in the class
         self._save_basic_variables(
@@ -339,6 +350,7 @@ class GateFolding(MitigationTask):
             broadcast_obs_and_params,
             trex,
             quantum_program,
+            trim_measurements,
         )
 
         self.noise_factors = np.array(noise_factors, dtype=float)
@@ -359,7 +371,9 @@ class GateFolding(MitigationTask):
             folding_pm = PassManager([GateFoldingPass(noise_factor, folding_method)])
             folded_circuit = folding_pm.run(circuit)
 
-            boxed_circuit = self._box_circuit(folded_circuit, self.custom_boxing_options)
+            boxed_circuit = self._box_circuit(
+                folded_circuit, self.custom_boxing_options, self.meas_qubits
+            )
             # Build the template and the samplex
             template, samplex = build(boxed_circuit)
 
@@ -404,6 +418,8 @@ class GateFolding(MitigationTask):
             "param_shape": self.param_shape,
             "broadcast_obs_and_params": self.broadcast_obs_and_params,
             "meas_bases": meas_bases_str,
+            "meas_qubits": self.meas_qubits,
+            "circuit_num_qubits": self.circuit_num_qubits,
             "program_item_index": self._program_item_index,
             "trex_calibration": self.trex.has_calibration_result()
             if self.trex is not None
@@ -414,6 +430,10 @@ class GateFolding(MitigationTask):
         }
 
         self._add_data_to_passthrough_data(data_for_passthrough, quantum_program)
+        # Register with TREX only once nothing can fail anymore, so that a failed ``prepare``
+        # does not leave this task behind in the TREX calibration.
+        if trex is not None:
+            trex.tasks.append(self)
         return quantum_program
 
     def postprocess(  # type: ignore[override]
@@ -509,6 +529,8 @@ class GateFolding(MitigationTask):
             measure_noise_data=measure_noise_data,
             broadcast_obs_and_params=self.broadcast_obs_and_params,
             custom_fit=custom_fit,
+            meas_qubits=self.meas_qubits,
+            circuit_num_qubits=self.circuit_num_qubits,
         )
 
     @staticmethod
@@ -801,6 +823,8 @@ class GateFolding(MitigationTask):
         gf.param_shape = param_shape
         gf.broadcast_obs_and_params = broadcast_obs_and_params
         gf.meas_bases = meas_bases
+        gf.meas_qubits = passthrough.get("meas_qubits")
+        gf.circuit_num_qubits = passthrough.get("circuit_num_qubits")
         gf._program_item_index = program_item_index
         gf.noise_factors = noise_factors
         gf.extrapolator = extrapolator
@@ -825,6 +849,8 @@ class GateFolding(MitigationTask):
             Callable[..., np.ndarray], list[float], tuple[float, ...] | tuple[list[float], ...]
         ]
         | None = None,
+        meas_qubits: list[int] | None = None,
+        circuit_num_qubits: int | None = None,
     ) -> PubResult:
         """Process expectation values for a single item result.
 
@@ -855,6 +881,13 @@ class GateFolding(MitigationTask):
                 ``(function, p_0, bounds)``. The function should take the independent variable as the first argument and
                 the parameters to fit as separate remaining arguments. p_0 is an array of the initial guess for the parameters,
                 and bounds are the bounds on the parameters. These parameters will be sent as arguments for ``scipy.optimize.curve_fit`` function.
+            meas_qubits: Sorted list of the circuit qubit indices that were measured, if the task was
+                prepared with ``trim_measurements=True`` (available as ``task.meas_qubits``). Must be
+                given together with ``circuit_num_qubits``. If ``None``, all the qubits are assumed to
+                be measured.
+            circuit_num_qubits: The total number of qubits in the circuit. Used together with
+                ``meas_qubits`` to expand the data back to the full width. Must be given together
+                with ``meas_qubits``.
 
         Returns:
             A PubResult which contains the following fields:
@@ -878,6 +911,7 @@ class GateFolding(MitigationTask):
             ValueError: If one of the ``item_results``' ``'_meas'`` data has an invalid number of axes.
             ValueError: If ``param_shape`` and ``observables.shape`` cannot be broadcasted against each other.
             ValueError: If ``noise_factors`` is under-specified for any extrapolator.
+            ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
         """
         _validate_noise_factors(noise_factors, extrapolator)
 
@@ -965,8 +999,16 @@ class GateFolding(MitigationTask):
                     f"``item_result['_meas']`` has ``{data.ndim}`` axes, expected ``4`` or ``5``."
                 )
 
+            # Expand compressed measurement data back to full-circuit width, so that all downstream
+            # postprocessing can use the observable qubit indices without any remapping.
+            data, meas_flips = _expand_meas_data_and_flips(
+                data,
+                item_result.get("measurement_flips._meas", None),
+                meas_qubits,
+                circuit_num_qubits,
+            )
+
             # Apply measurement flips if present
-            meas_flips = item_result.get("measurement_flips._meas", None)
             if meas_flips is not None:
                 data ^= meas_flips
 
@@ -1013,4 +1055,9 @@ class GateFolding(MitigationTask):
         return PubResult(data=data_bin, metadata={"selected_extrapolators": selected_extrapolators})
 
 
-VERSION_TO_POSTPROCESSOR = {"0.1": GateFolding.compute_expectation_value_gate_folding}
+# Both versions share the same postprocessor. Version 0.2 exists because older releases
+# do not support it.
+VERSION_TO_POSTPROCESSOR = {
+    "0.1": GateFolding.compute_expectation_value_gate_folding,
+    "0.2": GateFolding.compute_expectation_value_gate_folding,
+}
