@@ -70,6 +70,12 @@ docs = [
     "nbsphinx>=0.9.4",
     "reno>=4.1",
 ]
+all = [
+    "qiskit-mitigation[slc]",
+]
+slc = [
+    "qiskit-addon-slc>=0.1.0"
+]
 
 [tool.coverage.run]
 concurrency = ["multiprocessing"]
