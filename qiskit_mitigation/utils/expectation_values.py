@@ -399,9 +399,9 @@ def _find_measure_basis_to_observable_mapping(
                 # TODO: enable multiple bases for each element, lowering variance in the expectation value calculation
                 if observables_elements_basis_found[observable_index][element_index]:
                     continue
-                commutes = (
-                    np.dot(observable_element.z, basis.x) + np.dot(observable_element.x, basis.z)
-                ) % 2 == 0
+                commutes = not np.any(
+                    (observable_element.z & basis.x) ^ (observable_element.x & basis.z)
+                )
                 if commutes:
                     basis_paulis.append(observable_element)
                     basis_coeffs.append(observable_coeff)
