@@ -26,6 +26,7 @@ jobs:
         python-version: ["3.10"]
         qiskit-ibm-runtime-ref:
           - "0.50.0"
+          - "0.51.0"
           - "main"
     env:
       QISKIT_IBM_RUNTIME_REF: ${{ matrix.qiskit-ibm-runtime-ref }}
