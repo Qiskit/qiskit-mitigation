@@ -47,6 +47,14 @@ $ tox -e py310,py311,py312
 
 These environments execute all tests using [pytest], which supports its own simple style of tests, in addition to [unittest]-style tests.
 
+## qiskit-ibm-runtime environment
+
+The `qiskit-ibm-runtime` environment runs the unit tests of [qiskit-ibm-runtime] against the working tree. By default the environment tests against the `main` branch of `qiskit-ibm-runtime`.  The `QISKIT_IBM_RUNTIME_REF` environment variable selects a different version, and accepts any tag or branch of that repository:
+
+```sh
+$ QISKIT_IBM_RUNTIME_REF=0.50.0 tox -e qiskit-ibm-runtime
+```
+
 ## Coverage environment
 
 The `coverage` environment uses [Coverage.py] to ensure that the fraction of code tested by pytest is above some threshold (enforced to be 100% for new modules).  A detailed, line-by-line coverage report can be viewed by navigating to `htmlcov/index.html` in a web browser.
@@ -78,6 +86,7 @@ $ tox -e docs-clean
 ```
 
 [tox]: https://github.com/tox-dev/tox
+[qiskit-ibm-runtime]: https://github.com/Qiskit/qiskit-ibm-runtime
 [`tox.ini`]: ../tox.ini
 [`pyproject.toml`]: ../pyproject.toml
 [mypy]: https://mypy.readthedocs.io/en/stable/
