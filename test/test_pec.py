@@ -1367,37 +1367,6 @@ class TestPECSlc(unittest.TestCase):
         self.assertEqual(cost, 1.0)
 
     @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
-    def test_compute_local_scales_raises_when_no_terms_eligible_at_budget_1(self):
-        """When all rates are positive non-zero, sampling_cost_budget=1 raises ValueError."""
-        from qiskit_addon_slc.utils import generate_noise_model_paulis
-
-        pec = PEC()
-        qc = _simple_circuit()
-        obs = SparsePauliOp("ZZ")
-        slc_boxing_options = {
-            "add_tags": "unique_box",
-            "inject_noise_strategy": "individual_modification",
-        }
-        pec.compute_bounds_using_slc(qc, obs, custom_boxing_options=slc_boxing_options)
-        pec_layers = [
-            layer
-            for layer in pec.find_unique_layers(qc, slc_boxing_options)
-            if get_annotation(layer.operation, InjectNoise)
-        ]
-        noise_model_paulis = generate_noise_model_paulis(pec_layers, None, qc)
-        all_positive_noise_maps = {
-            ref: PauliLindbladMap.from_sparse_list(
-                [(p, qbs, 0.01) for p, qbs in paulis.to_sparse_list()],
-                qc.num_qubits,
-            )
-            for ref, paulis in noise_model_paulis.items()
-        }
-        with self.assertRaisesRegex(
-            ValueError, "No error terms are eligible for mitigation even at the unmitigated limit"
-        ):
-            pec.compute_local_scales_using_slc(all_positive_noise_maps)
-
-    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_compute_local_scales_boxes_circuit_when_needed(self):
         """Without an existing ``boxed_circuit``, the circuit is boxed."""
         pec = PEC()

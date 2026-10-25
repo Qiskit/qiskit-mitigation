@@ -532,7 +532,7 @@ class PEC(MitigationTask):
         noise_maps: dict[str, PauliLindbladMap],
         sampling_cost_budget: float = np.inf,
         bias_tolerance: float = 0.0,
-    ) -> tuple[dict[str, PauliLindbladMap], float, float]:
+    ) -> tuple[dict[str, np.ndarray], float, float]:
         """Merge the pre-computed forward and backward bounds and compute local scales which are used to specify which individual error terms to mitigate.
 
         Either the sampling_cost_budget or bias_tolerance must be specified. The former puts an upper bound on the sampling cost while the latter puts an upper bound on the remaining bias to tolerate.
@@ -578,17 +578,12 @@ class PEC(MitigationTask):
         )
         self._slc_merged_bounds = merged_bounds
 
-        try:
-            max_bias_local_scales, _, max_bais = compute_local_scales(
-                boxed_circuit, merged_bounds, noise_maps, sampling_cost_budget=1
-            )
-        except IndexError as ex:
-            raise ValueError(
-                "No error terms are eligible for mitigation even at the unmitigated limit "
-                "(sampling_cost_budget=1). This typically happens when all noise rates are "
-                "zero or the computed bounds have no nonzero entries. "
-                "Check that the noise maps contain meaningful (non-zero) error rates."
-            ) from ex
+        max_bias_local_scales, _, max_bais = compute_local_scales(
+            boxed_circuit,
+            merged_bounds,  # type: ignore[arg-type]
+            noise_maps,
+            sampling_cost_budget=1,
+        )
         if bias_tolerance > max_bais:
             warnings.warn(
                 f"Bias tolerance exceeds unmitigated bias ({max_bais}). Using the unmitigated bias as the tolerance.",
@@ -598,7 +593,7 @@ class PEC(MitigationTask):
 
         local_scales, sampling_cost, reduced_bias = compute_local_scales(
             boxed_circuit,
-            merged_bounds,
+            merged_bounds,  # type: ignore[arg-type]
             noise_maps,
             sampling_cost_budget=sampling_cost_budget,
             bias_tolerance=bias_tolerance,
