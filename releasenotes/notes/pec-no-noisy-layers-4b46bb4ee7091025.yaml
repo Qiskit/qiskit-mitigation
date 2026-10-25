@@ -1,0 +1,8 @@
+---
+fixes:
+  - |
+    Fixed :meth:`.PEC.postprocess` failing with ``Results must contain 'pauli_signs'`` for a
+    circuit with no noisy layers, such as one without entangling gates. Such a circuit has no
+    noise to cancel, so its gamma factor is ``1`` and its result has no ``pauli_signs``; it is
+    now post-processed as a regular twirled result. A missing ``pauli_signs`` with any other
+    gamma still raises. See `#33 <https://github.com/Qiskit/qiskit-mitigation/issues/33>`__.
