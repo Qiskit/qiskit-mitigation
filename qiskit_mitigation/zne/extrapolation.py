@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import warnings
 from collections.abc import Callable, Sequence
-from typing import Literal
+from typing import Literal, cast
 
 import numpy as np
 from numpy.polynomial.polynomial import polyval
@@ -254,7 +254,7 @@ def _clamp_degenerate_stds(y_std: np.ndarray) -> np.ndarray | None:
         )
         return None
     # Map nan to inf so it clamps to the largest error rather than propagating nan.
-    return np.clip(np.nan_to_num(y_std, nan=np.inf), finite.min(), finite.max())
+    return cast(np.ndarray, np.clip(np.nan_to_num(y_std, nan=np.inf), finite.min(), finite.max()))
 
 
 def _select_zne_extrapolated_result(

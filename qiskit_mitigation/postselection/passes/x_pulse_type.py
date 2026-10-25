@@ -13,10 +13,10 @@
 # Reminder: update the RST file in docs/apidocs when adding new interfaces.
 """X-pulse type used by the non-Markovian error check passes."""
 
-from enum import Enum
+from enum import StrEnum
 
 
-class XPulseType(str, Enum):
+class XPulseType(StrEnum):
     """The type of X-pulse to apply for a non-Markovian error check measurement."""
 
     XSLOW = "xslow"
