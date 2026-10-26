@@ -1,4 +1,4 @@
 ---
 features:
   - |
-    The list of SUPPORTED_FOLDED_GATES now includes additional two-qubit gates.
+    Gate folding now supports most two-qubit gates.
