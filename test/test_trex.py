@@ -29,6 +29,7 @@ from samplomatic.quantum_program import QuantumProgramResult, SamplexItem
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _measured_qubits(circuit: QuantumCircuit) -> list[int]:
     """Return the sorted indices of the qubits that ``circuit`` measures."""
     return sorted(
@@ -38,6 +39,7 @@ def _measured_qubits(circuit: QuantumCircuit) -> list[int]:
             if instr.operation.name.startswith("measure")
         }
     )
+
 
 def _simple_circuit(num_qubits: int = 2) -> QuantumCircuit:
     """Return a simple non-parametric circuit."""
