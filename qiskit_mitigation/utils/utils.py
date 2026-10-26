@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -112,6 +113,11 @@ def find_combined_unique_layers(
     Supplying the wanted mitigation methods is recommended to ensure that the unique layers used for learning wiil be equal to those used in execution.
     The returned boxes can be filtered so only boxes containing measurements, only boxes containing solely gates or all types of boxes are returned.
 
+    .. note::
+        The measurement boxes are found without the boxing options that ``prepare`` adds when a
+        :class:`~qiskit_mitigation.TREX` is used, so they do not match the measurement boxes of a
+        task prepared with TREX.
+
     Args:
         circuits: The circuit to find the unique layers for.
         mitigation_types: List of initiated mitigation classes that the circuits will be mitigated with. Each mitigation method might enforce boxing options that will affect the unique layers.
@@ -142,6 +148,14 @@ def find_combined_unique_layers(
     """
     from qiskit_mitigation.mitigation_task import MitigationTask
 
+    if box_types == "measurement":
+        warnings.warn(
+            "The measurement boxes are found without the boxing options that `prepare` adds when "
+            "a TREX is used, so they do not match the measurement boxes of tasks prepared with "
+            "TREX.",
+            UserWarning,
+            stacklevel=2,
+        )
     if mitigation_types is None:
         mitigation_types = [MitigationTask()] * len(circuits)
     if len(mitigation_types) != len(circuits):

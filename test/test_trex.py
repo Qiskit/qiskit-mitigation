@@ -29,6 +29,15 @@ from samplomatic.quantum_program import QuantumProgramResult, SamplexItem
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _measured_qubits(circuit: QuantumCircuit) -> list[int]:
+    """Return the sorted indices of the qubits that ``circuit`` measures."""
+    return sorted(
+        {
+            circuit.find_bit(instr.qubits[0]).index
+            for instr in circuit.data
+            if instr.operation.name.startswith("measure")
+        }
+    )
 
 def _simple_circuit(num_qubits: int = 2) -> QuantumCircuit:
     """Return a simple non-parametric circuit."""
@@ -206,6 +215,36 @@ class TestPrepareCalibrationCircuit(unittest.TestCase):
         item = TREX._prepare_calibration_circuit(1, num_randomizations=3)
         self.assertIsInstance(item, SamplexItem)
         self.assertEqual(item.circuit.num_qubits, 1)
+
+    def test_all_qubits_are_measured_without_meas_qubits(self):
+        """Without ``meas_qubits`` every qubit of the calibration circuit is measured."""
+        item = TREX._prepare_calibration_circuit(4, num_randomizations=5)
+        self.assertEqual(_measured_qubits(item.circuit), [0, 1, 2, 3])
+
+    def test_only_meas_qubits_are_measured(self):
+        """Only the given qubits are measured, each into the bit of its own index."""
+        item = TREX._prepare_calibration_circuit(6, num_randomizations=5, meas_qubits=[0, 3, 5])
+        self.assertEqual(item.circuit.num_qubits, 6)
+        self.assertEqual(item.circuit.cregs[0].size, 6)
+        self.assertEqual(_measured_qubits(item.circuit), [0, 3, 5])
+        measures = [
+            instr for instr in item.circuit.data if instr.operation.name.startswith("measure")
+        ]
+        for instr in measures:
+            self.assertEqual(
+                item.circuit.find_bit(instr.qubits[0]).index,
+                item.circuit.find_bit(instr.clbits[0]).index,
+            )
+
+    def test_unmeasured_columns_of_the_sampled_flips_are_zero(self):
+        """Measurement flips are only drawn for the measured calibration columns."""
+        item = TREX._prepare_calibration_circuit(6, num_randomizations=200, meas_qubits=[0, 3, 5])
+        flips = np.asarray(
+            item.samplex.sample({}, num_randomizations=200)["measurement_flips._meas"]
+        )
+        mean = flips.mean(axis=tuple(range(flips.ndim - 1)))
+        np.testing.assert_array_equal(mean[[1, 2, 4]], 0)
+        self.assertTrue(np.all(mean[[0, 3, 5]] > 0))
 
 
 # ---------------------------------------------------------------------------
@@ -829,11 +868,11 @@ SHOTS = 8
 
 
 class TestTrexSharedByTrimmedTasks(unittest.TestCase):
-    """The calibration measures the prefix ``0..max(measured qubits)`` of all the tasks."""
+    """The calibration measures the union of the qubits measured by all the tasks."""
 
     @staticmethod
-    def _cal_size(*tasks_args):
-        """Prepare one task per ``(circuit, observable, trim)`` with one TREX; return the width."""
+    def _calibration_circuit(*tasks_args):
+        """Prepare one task per ``(circuit, observable, trim)`` with one TREX; return the item circuit."""
         trex = TREX()
         program = None
         for circuit, observable, trim in tasks_args:
@@ -848,22 +887,46 @@ class TestTrexSharedByTrimmedTasks(unittest.TestCase):
                 trim_measurements=trim,
             )
         trex.prepare(2, program)
-        return program.items[-1].circuit.cregs[0].size
+        return program.items[-1].circuit
 
-    def test_calibration_is_the_prefix_up_to_the_highest_measured_qubit(self):
+    def _cal(self, *tasks_args):
+        """Return ``(width of the _meas register, measured qubits)`` of the calibration."""
+        circuit = self._calibration_circuit(*tasks_args)
+        return circuit.cregs[0].size, _measured_qubits(circuit)
+
+    def test_calibration_measures_the_union_of_the_measured_qubits(self):
         low = (_x_on(6, 0, 1), "IIIIZZ", True)  # measures qubits 0, 1
-        high = (_x_on(6, 3), "IIIZII", True)  # measures qubit 3
-        self.assertEqual(self._cal_size(low), 2)
-        self.assertEqual(self._cal_size(high), 4)
-        self.assertEqual(self._cal_size(low, high), 4)
+        high = (_x_on(6, 3), "IIZIII", True)  # measures qubit 3
+        self.assertEqual(self._cal(low), (2, [0, 1]))
+        self.assertEqual(self._cal(high), (4, [3]))
+        # qubit 2 is idle in both tasks, so it is not measured
+        self.assertEqual(self._cal(low, high), (4, [0, 1, 3]))
+
+    def test_union_of_overlapping_tasks_has_no_duplicates(self):
+        first = (_x_on(6, 0, 2), "IIIZIZ", True)  # measures qubits 0, 2
+        second = (_x_on(6, 2, 5), "ZIZIII", True)  # measures qubits 2, 3, 5
+        self.assertEqual(self._cal(first, second), (6, [0, 2, 3, 5]))
 
     def test_tasks_that_do_not_trim_measure_their_whole_circuit(self):
         trimmed = (_x_on(6, 0), "IIIIIZ", True)
         untrimmed = (_x_on(3, 0), "IIZ", False)
-        self.assertEqual(self._cal_size(trimmed, untrimmed), 3)
+        self.assertEqual(self._cal(trimmed, untrimmed), (3, [0, 1, 2]))
         untrimmed_wide = (_x_on(6, 0), "IIIIIZ", False)
         narrow = (_x_on(3, 0), "IIZ", True)
-        self.assertEqual(self._cal_size(narrow, untrimmed_wide), 6)
+        self.assertEqual(self._cal(narrow, untrimmed_wide), (6, [0, 1, 2, 3, 4, 5]))
+
+    def test_trimmed_and_untrimmed_tasks_are_united(self):
+        trimmed = (_x_on(8, 7), "ZIIIIIII", True)  # measures qubit 7
+        untrimmed = (_x_on(3, 0), "IIZ", False)  # measures qubits 0, 1, 2
+        self.assertEqual(self._cal(trimmed, untrimmed), (8, [0, 1, 2, 7]))
+
+    def test_idle_qubits_below_the_highest_measured_qubit_are_not_measured(self):
+        """The register spans ``0..max`` so columns equal qubit indices, but gaps stay unmeasured."""
+        circuit = self._calibration_circuit(
+            (_x_on(6, 0), "IIIIIZ", True), (_x_on(6, 4), "IZIIII", True)
+        )
+        self.assertEqual(_measured_qubits(circuit), [0, 4])
+        self.assertEqual(circuit.cregs[0].size, 5)
 
     def test_tasks_with_different_support_use_their_own_calibration_columns(self):
         """Column ``i`` of the calibration is circuit qubit ``i`` for every task."""
@@ -896,7 +959,7 @@ class TestTrexSharedByTrimmedTasks(unittest.TestCase):
         np.testing.assert_allclose(high.postprocess(results).data.evs, [-np.exp(0.2)], atol=1e-9)
 
     def test_noise_model_narrower_than_the_circuit_is_widened(self):
-        """The calibration only covers the prefix of the single task's measured qubits."""
+        """The calibration register ends at the highest qubit measured by the single task."""
         task = MitigationTask()
         task.prepare(
             _x_on(5, 0, 1), [SparsePauliOp("IIIZZ")], None, trex=TREX(),

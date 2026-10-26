@@ -102,10 +102,12 @@ class TREX:
     ) -> QuantumProgram:
         """Adds a TREX calibration item to the quantum program.
 
-        The created calibration circuit measures qubits ``0`` to ``m``, where ``m`` is the largest
-        qubit index measured by any of the tasks connected to this instance. Idle qubits below
-        ``m`` are measured too, so that column ``i`` of the calibration is always circuit qubit ``i``.
-        The classical register of the measurement is named ``_meas``.
+        The created calibration circuit measures the union of the qubits measured by the tasks
+        connected to this instance. A task that does not trim its measurements contributes all the
+        qubits of its circuit. The classical register of the measurement is named ``_meas`` and has
+        ``m + 1`` bits, where ``m`` is the largest measured qubit index, so that column ``i`` of the
+        calibration is always circuit qubit ``i``. Columns of qubits that no task measures are not
+        measured and always hold zeros.
 
         Args:
             num_randomizations: Number of randomizations for the TREX calibration.
@@ -119,14 +121,20 @@ class TREX:
             raise ValueError(
                 "A TREX must be connected to at least one mitigation task to create a calibration task."
             )
-        num_cal_qubits = max(
-            max(task.meas_qubits) + 1 if task.meas_qubits is not None else task.circuit.num_qubits
-            for task in self.tasks
+        cal_qubits = sorted(
+            set().union(
+                *(
+                    task.meas_qubits
+                    if task.meas_qubits is not None
+                    else range(task.circuit.num_qubits)
+                    for task in self.tasks
+                )
+            )
         )
         self._program_item_index = len(quantum_program.items)
         quantum_program.items.append(
             self._prepare_calibration_circuit(
-                num_cal_qubits, num_randomizations, custom_boxing_options
+                max(cal_qubits) + 1, num_randomizations, custom_boxing_options, cal_qubits
             )
         )
 
@@ -211,15 +219,19 @@ class TREX:
         num_qubits: int,
         num_randomizations: int,
         custom_boxing_options: dict | None = None,
+        meas_qubits: Sequence[int] | None = None,
     ) -> SamplexItem:
         """Creates a TREX calibration circuit.
 
-        The calibration circuit measures all of its ``num_qubits`` qubits.
+        The calibration circuit has ``num_qubits`` qubits and a ``_meas`` register of the same
+        size, in which qubit ``i`` is measured into bit ``i``.
 
         Args:
             num_qubits: The number of qubits of the calibration circuit.
             num_randomizations: The number of TREX calibration randomizations.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+            meas_qubits: The qubits to measure. Bits of the other qubits are not written. If
+                ``None``, all the ``num_qubits`` qubits are measured.
 
         Returns:
             Samplex item containing calibration circuit for TREX factors calculation.
@@ -227,7 +239,11 @@ class TREX:
         classical_cal_reg = ClassicalRegister(num_qubits, name="_meas")
         trex_circuit = QuantumCircuit(num_qubits)
         trex_circuit.add_register(classical_cal_reg)
-        trex_circuit.measure_all(add_bits=False)
+        if meas_qubits is None:
+            trex_circuit.measure_all(add_bits=False)
+        else:
+            trex_circuit.barrier()
+            trex_circuit.measure(list(meas_qubits), [classical_cal_reg[q] for q in meas_qubits])
         annotated_trex_circuit = TREX._box_circuit(trex_circuit, custom_boxing_options)
         template_trex_circuit, trex_samplex = build(annotated_trex_circuit)
         trex_calibration_item = SamplexItem(

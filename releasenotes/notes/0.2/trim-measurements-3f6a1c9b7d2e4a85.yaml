@@ -11,8 +11,10 @@ features:
     qubits of the circuit as before.
 
     When several trimmed tasks share a :class:`~qiskit_mitigation.TREX` instance, the TREX
-    calibration measures the qubits ``0`` to ``m``, where ``m`` is the highest qubit measured by
-    any of the tasks. A task that does not trim its measurements contributes all of its qubits.
+    calibration measures the union of the qubits measured by the tasks. A task that does not trim
+    its measurements contributes all of its qubits. The calibration register spans the qubits
+    ``0`` to the highest measured qubit, so that column ``i`` is always circuit qubit ``i``, but
+    qubits that no task measures are not measured.
 
     When ``twirling_strategy="all"`` is combined with ``trim_measurements=True``, a
     ``UserWarning`` is issued because all qubits are active under that strategy and trimming
@@ -25,6 +27,11 @@ features:
     ``trim_measurements=True`` is passed to ``prepare``, and pass the same observables. Noise
     learned with a different choice is not found by ``PEC.prepare`` and ``PEA.prepare``, which
     raise a ``ValueError`` about the missing layer.
+  - |
+    :func:`~qiskit_mitigation.find_combined_unique_layers` issues a ``UserWarning`` when
+    ``box_types="measurement"`` is requested. The measurement boxes are found without the boxing
+    options that ``prepare`` adds when a :class:`~qiskit_mitigation.TREX` is used, so they do not
+    match the measurement boxes of tasks prepared with TREX.
 upgrade:
   - |
     The programs created by :class:`~qiskit_mitigation.MitigationTask`,

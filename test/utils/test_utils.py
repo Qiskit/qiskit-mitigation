@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import unittest
+import warnings
 
 import numpy as np
 from qiskit import QuantumCircuit
@@ -571,37 +572,55 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         task_unmitigated = MitigationTask()
         pec = PEC()
         tasks = [task_unmitigated, pec]
-        combined_layers = find_combined_unique_layers(
-            [self.circuit, self.circuit], mitigation_types=tasks, box_types="measurement"
-        )
+        with self.assertWarns(UserWarning):
+            combined_layers = find_combined_unique_layers(
+                [self.circuit, self.circuit], mitigation_types=tasks, box_types="measurement"
+            )
         self.assertTrue(len(combined_layers) > 0, "Expected at least one measurement box")
         for layer in combined_layers:
             self.assertEqual(_find_box_type(layer), "measurement")
 
     def test_measurement_only_without_mitigation_types(self):
         """box_types='measurement' without mitigation_types returns only measurement boxes."""
-        layers = find_combined_unique_layers([self.circuit, self.circuit], box_types="measurement")
+        with self.assertWarns(UserWarning):
+            layers = find_combined_unique_layers(
+                [self.circuit, self.circuit], box_types="measurement"
+            )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
             self.assertEqual(_find_box_type(layer), "measurement")
 
     def test_measurement_only_with_single_mitigation_task(self):
         """box_types='measurement' with a single MitigationTask returns only measurement boxes."""
-        layers = find_combined_unique_layers(
-            [self.circuit], mitigation_types=[MitigationTask()], box_types="measurement"
-        )
+        with self.assertWarns(UserWarning):
+            layers = find_combined_unique_layers(
+                [self.circuit], mitigation_types=[MitigationTask()], box_types="measurement"
+            )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
             self.assertEqual(_find_box_type(layer), "measurement")
 
     def test_measurement_only_with_single_pec(self):
         """box_types='measurement' with a single PEC task returns only measurement boxes."""
-        layers = find_combined_unique_layers(
-            [self.circuit], mitigation_types=[PEC()], box_types="measurement"
-        )
+        with self.assertWarns(UserWarning):
+            layers = find_combined_unique_layers(
+                [self.circuit], mitigation_types=[PEC()], box_types="measurement"
+            )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
             self.assertEqual(_find_box_type(layer), "measurement")
+
+    def test_measurement_boxes_warn_that_they_do_not_match_trex(self):
+        """Asking for the measurement boxes warns that TREX measurement boxes are different."""
+        with self.assertWarnsRegex(UserWarning, "TREX"):
+            find_combined_unique_layers([self.circuit], box_types="measurement")
+
+    def test_gate_and_all_boxes_do_not_warn(self):
+        """Only asking for the measurement boxes alone warns; the default does not."""
+        for box_types in ("gates", "all"):
+            with self.subTest(box_types=box_types), warnings.catch_warnings():
+                warnings.simplefilter("error")
+                find_combined_unique_layers([self.circuit], box_types=box_types)
 
     # --- uniqueness and deduplication ---
 

@@ -351,13 +351,20 @@ class TrimMeasurementsTestsMixin:
 
     # -- TREX ----------------------------------------------------------------------------------
 
-    def test_trex_calibration_is_the_prefix_up_to_the_highest_measured_qubit(self):
+    def test_trex_calibration_measures_the_measured_qubits_of_the_task(self):
         trex = TREX()
         task, program = self._prepare(eigenstate_circuit(), self.OBSERVABLES, trim=True, trex=trex)
         self.assertEqual(trex.tasks, [task])
         trex.prepare(RANDOMIZATIONS, program)
-        # the highest measured qubit is 3, so the calibration measures the qubits 0 to 3
-        self.assertEqual(program.items[-1].circuit.cregs[0].size, 4)
+        calibration = program.items[-1].circuit
+        # the register spans the qubits 0 to the highest measured one, so column i is qubit i
+        self.assertEqual(calibration.cregs[0].size, 4)
+        measured = {
+            calibration.find_bit(instr.qubits[0]).index
+            for instr in calibration.data
+            if instr.operation.name.startswith("measure")
+        }
+        self.assertEqual(measured, set(task.meas_qubits))
 
 
 class LearnedLayersTestsMixin:
