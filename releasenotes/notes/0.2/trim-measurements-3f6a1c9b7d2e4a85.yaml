@@ -1,0 +1,46 @@
+---
+features:
+  - |
+    Added the ``trim_measurements`` argument to the ``prepare`` methods of
+    :class:`~qiskit_mitigation.MitigationTask`, :class:`~qiskit_mitigation.PEC`,
+    :class:`~qiskit_mitigation.zne.PEA` and :class:`~qiskit_mitigation.zne.GateFolding`.
+    When it is ``True``, the task measures only the qubits that have instructions on them or are
+    in the support of the observables, and the measured qubits are stored in the ``meas_qubits``
+    attribute of the task. Every task finds its own measured qubits, so tasks with different
+    support can be combined in one program. The default is ``False``, which keeps measuring all the
+    qubits of the circuit as before.
+
+    When several trimmed tasks share a :class:`~qiskit_mitigation.TREX` instance, the TREX
+    calibration measures the union of the qubits measured by the tasks. A task that does not trim
+    its measurements contributes all of its qubits. The calibration register spans the qubits
+    ``0`` to the highest measured qubit, so that column ``i`` is always circuit qubit ``i``, but
+    qubits that no task measures are not measured.
+
+    When ``twirling_strategy="all"`` is combined with ``trim_measurements=True``, a
+    ``UserWarning`` is issued because all qubits are active under that strategy and trimming
+    therefore has no effect.
+  - |
+    Added the ``observables`` argument to
+    :func:`~qiskit_mitigation.find_combined_unique_layers` and to ``find_unique_layers`` of the
+    mitigation tasks, to find the unique layers of circuits with trimmed measurements. Trimming
+    changes the boxing of the circuit, so pass ``observables`` to the layer finder if and only if
+    ``trim_measurements=True`` is passed to ``prepare``, and pass the same observables. Noise
+    learned with a different choice is not found by ``PEC.prepare`` and ``PEA.prepare``, which
+    raise a ``ValueError`` about the missing layer.
+  - |
+    :func:`~qiskit_mitigation.find_combined_unique_layers` issues a ``UserWarning`` when
+    ``box_types="measurement"`` is requested. The measurement boxes are found without the boxing
+    options that ``prepare`` adds when a :class:`~qiskit_mitigation.TREX` is used, so they do not
+    match the measurement boxes of tasks prepared with TREX.
+upgrade:
+  - |
+    The programs created by :class:`~qiskit_mitigation.MitigationTask`,
+    :class:`~qiskit_mitigation.PEC`, :class:`~qiskit_mitigation.zne.PEA` and
+    :class:`~qiskit_mitigation.zne.GateFolding` now save the version ``"0.2"`` in their
+    passthrough data, together with ``meas_qubits`` and ``circuit_num_qubits``. Older versions of
+    the library cannot post-process them. Programs created with version ``"0.1"`` can still be
+    loaded and post-processed.
+  - |
+    :class:`~qiskit_mitigation.TREX` now registers a task only at the end of the task's
+    ``prepare``, so a task whose preparation failed no longer remains connected to the TREX
+    instance and no longer widens its calibration.

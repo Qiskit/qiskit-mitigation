@@ -202,6 +202,17 @@ def find_combined_unique_layers(
         if trex or (trex is None and task.trex is not None):
             boxing_options_list[i] = TREX._edit_boxing_options(boxing_options_list[i])
 
+    meas_qubits_list: Sequence[list[int] | None]
+    if observables is None:
+        meas_qubits_list = [None] * len(circuits)
+    else:
+        meas_qubits_list = [
+            derive_meas_qubits(circuit, obs, boxing_options)
+            for circuit, obs, boxing_options in zip(
+                circuits, observables, boxing_options_list, strict=True
+            )
+        ]
+
     boxed_circuits = (
         task._box_circuit(circuit, boxing_options, meas_qubits)
         for task, circuit, boxing_options, meas_qubits in zip(
