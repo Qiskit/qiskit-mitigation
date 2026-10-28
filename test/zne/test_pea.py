@@ -30,6 +30,8 @@ from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
 from samplomatic.utils import get_annotation
 
+from ..trim_helpers import LearnedLayersTestsMixin, TrimMeasurementsTestsMixin
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -452,11 +454,11 @@ class TestPEAPostprocess(unittest.TestCase):
         sentinel = object()
         with patch.dict(
             "qiskit_mitigation.zne.pea.VERSION_TO_POSTPROCESSOR",
-            {"0.1": MagicMock(return_value=sentinel)},
+            {"0.2": MagicMock(return_value=sentinel)},
         ) as mock_dict:
             result = pea.postprocess(MagicMock())
             self.assertIs(result, sentinel)
-            mock_fn = mock_dict["0.1"]
+            mock_fn = mock_dict["0.2"]
             _, call_kwargs = mock_fn.call_args
             np.testing.assert_array_equal(call_kwargs["noise_factors"], list(pea.noise_factors))
 
@@ -474,10 +476,10 @@ class TestPEAPostprocess(unittest.TestCase):
         override = [1.0, 7.0]
         with patch.dict(
             "qiskit_mitigation.zne.pea.VERSION_TO_POSTPROCESSOR",
-            {"0.1": MagicMock(return_value=None)},
+            {"0.2": MagicMock(return_value=None)},
         ) as mock_dict:
             pea.postprocess(MagicMock(), noise_factors=override)
-            mock_fn = mock_dict["0.1"]
+            mock_fn = mock_dict["0.2"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["noise_factors"], override)
 
@@ -495,10 +497,10 @@ class TestPEAPostprocess(unittest.TestCase):
         override = ["fallback"]
         with patch.dict(
             "qiskit_mitigation.zne.pea.VERSION_TO_POSTPROCESSOR",
-            {"0.1": MagicMock(return_value=None)},
+            {"0.2": MagicMock(return_value=None)},
         ) as mock_dict:
             pea.postprocess(MagicMock(), extrapolator=override)
-            mock_fn = mock_dict["0.1"]
+            mock_fn = mock_dict["0.2"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolator"], override)
 
@@ -517,10 +519,10 @@ class TestPEAPostprocess(unittest.TestCase):
         override = [0.0, 1.0]
         with patch.dict(
             "qiskit_mitigation.zne.pea.VERSION_TO_POSTPROCESSOR",
-            {"0.1": MagicMock(return_value=None)},
+            {"0.2": MagicMock(return_value=None)},
         ) as mock_dict:
             pea.postprocess(MagicMock(), extrapolated_noise_factors=override)
-            mock_fn = mock_dict["0.1"]
+            mock_fn = mock_dict["0.2"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolated_noise_factors"], override)
 
@@ -539,10 +541,10 @@ class TestPEAPostprocess(unittest.TestCase):
 
         with patch.dict(
             "qiskit_mitigation.zne.pea.VERSION_TO_POSTPROCESSOR",
-            {"0.1": MagicMock(return_value=None)},
+            {"0.2": MagicMock(return_value=None)},
         ) as mock_dict:
             pea.postprocess(MagicMock())
-            mock_fn = mock_dict["0.1"]
+            mock_fn = mock_dict["0.2"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(list(call_kwargs["extrapolated_noise_factors"]), saved)
 
@@ -959,6 +961,23 @@ class TestPEACreateInstanceFromPassthroughData(unittest.TestCase):
         passthrough = self._minimal_passthrough(trex_calibration=True)
         with self.assertRaises(ValueError):
             PEA.create_instance_from_passthrough_data(passthrough, trex=None)
+
+
+# ---------------------------------------------------------------------------
+# PEA  -  trim_measurements
+# ---------------------------------------------------------------------------
+
+
+class TestPEATrimMeasurements(TrimMeasurementsTestsMixin, unittest.TestCase):
+    """Tests for ``trim_measurements`` in :meth:`PEA.prepare`."""
+
+    task_cls = PEA
+
+
+class TestPEALearnedLayersMatch(LearnedLayersTestsMixin, unittest.TestCase):
+    """Noise learned for a different trimming is not found by :meth:`PEA.prepare`."""
+
+    task_cls = PEA
 
 
 if __name__ == "__main__":

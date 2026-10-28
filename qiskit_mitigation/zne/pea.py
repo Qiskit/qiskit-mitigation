@@ -32,6 +32,7 @@ from samplomatic.quantum_program import (
 
 from qiskit_mitigation.mitigation_task import MitigationTask
 from qiskit_mitigation.trex import TREX
+from qiskit_mitigation.utils.meas_qubits import _expand_meas_data_and_flips
 from qiskit_mitigation.zne.extrapolation import (
     ExtrapolatorType,
     _validate_noise_factors,
@@ -93,6 +94,7 @@ class PEA(MitigationTask):
         cls,
         circuit: QuantumCircuit,
         boxing_options: dict | None,
+        meas_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -105,6 +107,8 @@ class PEA(MitigationTask):
         Args:
             circuit: The circuit to group into boxes.
             boxing_options: Dictionary of boxing options. If ``None``, default boxing options are used.
+            meas_qubits: Circuit qubit indices to measure. Forwarded to the base implementation.
+                If ``None``, all qubits are measured.
 
         Returns:
             The boxed circuit.
@@ -138,7 +142,7 @@ class PEA(MitigationTask):
                 'boxing_options["inject_noise_strategy"] may not be ``no_modification``.'
             )
 
-        return super()._box_circuit(circuit, edited_boxing_options)
+        return super()._box_circuit(circuit, edited_boxing_options, meas_qubits)
 
     def prepare(
         self,
@@ -151,6 +155,7 @@ class PEA(MitigationTask):
         broadcast_obs_and_params: bool = False,
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
+        trim_measurements: bool = False,
         *,
         noise_maps: dict[str, PauliLindbladMap] | None = None,
         noise_factors: Sequence[float | int] = (1, 3, 5),
@@ -182,10 +187,21 @@ class PEA(MitigationTask):
             trex: A TREX mitigation instance that will be used to mitigate readout errors.
             quantum_program: The quantum program to add an item for. If None, a new program will
                 be created.
+            trim_measurements: Whether to measure only the qubits that have instructions on them or
+                are in the support of the observables, instead of all the qubits of the circuit.
+                The measured qubits are available in ``meas_qubits`` after the call.
+
+                .. warning::
+                    Trimming changes the boxing of the circuit, so ``noise_maps`` must be learned on
+                    the layers of a trimmed circuit: pass ``observables`` to the layer finder
+                    (:func:`~qiskit_mitigation.find_combined_unique_layers` or
+                    :meth:`~qiskit_mitigation.MitigationTask.find_unique_layers`) if and only if
+                    ``trim_measurements=True`` is passed to ``prepare``, and pass the same observables.
             noise_maps: A mapping between layer ref to a noise model to use for noise amplification.
                 The dict might contain layers not present in the given circuit, but must contain all
                 the mitigated layers. Assumes that the unique layers used for noise learning were extracted
-                using the ``find_unique_layers`` method with the same custom boxing options.
+                using the ``find_unique_layers`` method with the same custom boxing options, and with
+                ``observables`` passed if and only if ``trim_measurements=True``.
             noise_factors: The noise factors to use for amplifying the noise.
             extrapolator: The extrapolator model or models planned to be used in post-processing.
                 Used in preparation to validate that enough noise factors are present for a valid fit using these extrapolators.
@@ -202,6 +218,9 @@ class PEA(MitigationTask):
 
         Returns:
             A :class:`~.QuantumProgram` with PEA mitigated item that can be executed via Executor.
+
+        Raises:
+            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed.
         """
         if noise_maps is None:
             raise ValueError("noise_maps is missing")
@@ -213,7 +232,7 @@ class PEA(MitigationTask):
                     "projection operators. You can decompose into pauli operators if the "
                     "exponential cost is acceptable."
                 )
-            custom_boxing_options = trex._edit_boxing_options(self, custom_boxing_options)
+            custom_boxing_options = trex._edit_boxing_options(custom_boxing_options)
 
         # save variables in the class
         self._save_basic_variables(
@@ -226,6 +245,7 @@ class PEA(MitigationTask):
             broadcast_obs_and_params,
             trex,
             quantum_program,
+            trim_measurements,
         )
 
         self.noise_factors = np.array(noise_factors, dtype=float)
@@ -238,7 +258,9 @@ class PEA(MitigationTask):
             else None
         )
 
-        boxed_circuit = self._box_circuit(self.circuit, self.custom_boxing_options)
+        boxed_circuit = self._box_circuit(
+            self.circuit, self.custom_boxing_options, self.meas_qubits
+        )
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex
         template, samplex = build(boxed_circuit)
@@ -259,7 +281,12 @@ class PEA(MitigationTask):
             try:
                 noise_model = noise_maps[ref]
             except KeyError as ex:
-                raise ValueError(f"Noise model is missing for layer with reference {ref}") from ex
+                raise ValueError(
+                    f"Noise model is missing for layer with reference {ref}. The layers must be "
+                    "learned with the same circuit and custom boxing options, and with "
+                    "``observables`` passed to the layer finder if and only if "
+                    "``trim_measurements=True`` is passed to ``prepare``."
+                ) from ex
             pub_noise_model[ref] = noise_model
             samplex_arguments[f"noise_scales.{ref}"] = noise_scales
 
@@ -303,6 +330,8 @@ class PEA(MitigationTask):
             "param_shape": self.param_shape,
             "broadcast_obs_and_params": self.broadcast_obs_and_params,
             "meas_bases": meas_bases_str,
+            "meas_qubits": self.meas_qubits,
+            "circuit_num_qubits": self.circuit_num_qubits,
             "program_item_index": self._program_item_index,
             "trex_calibration": self.trex.has_calibration_result()
             if self.trex is not None
@@ -313,6 +342,10 @@ class PEA(MitigationTask):
         }
 
         self._add_data_to_passthrough_data(data_for_passthrough, quantum_program)
+        # Register with TREX only once nothing can fail anymore, so that a failed ``prepare``
+        # does not leave this task behind in the TREX calibration.
+        if trex is not None:
+            trex.tasks.append(self)
         return quantum_program
 
     def postprocess(  # type: ignore[override]
@@ -406,6 +439,8 @@ class PEA(MitigationTask):
             measure_noise_data=measure_noise_data,
             broadcast_obs_and_params=self.broadcast_obs_and_params,
             custom_fit=custom_fit,
+            meas_qubits=self.meas_qubits,
+            circuit_num_qubits=self.circuit_num_qubits,
         )
 
     @staticmethod
@@ -452,6 +487,8 @@ class PEA(MitigationTask):
         pea.param_shape = param_shape
         pea.broadcast_obs_and_params = broadcast_obs_and_params
         pea.meas_bases = meas_bases
+        pea.meas_qubits = passthrough.get("meas_qubits")
+        pea.circuit_num_qubits = passthrough.get("circuit_num_qubits")
         pea._program_item_index = program_item_index
         pea.noise_factors = noise_factors
         pea.extrapolator = extrapolator
@@ -476,6 +513,8 @@ class PEA(MitigationTask):
             Callable[..., np.ndarray], list[float], tuple[float, ...] | tuple[list[float], ...]
         ]
         | None = None,
+        meas_qubits: list[int] | None = None,
+        circuit_num_qubits: int | None = None,
     ) -> PubResult:
         """Process expectation values for a single item result.
 
@@ -506,6 +545,13 @@ class PEA(MitigationTask):
                 ``(function, p_0, bounds)``. The function should take the independent variable as the first argument and
                 the parameters to fit as separate remaining arguments. p_0 is an array of the initial guess for the parameters,
                 and bounds are the bounds on the parameters. These parameters will be sent as arguments for ``scipy.optimize.curve_fit`` function.
+            meas_qubits: Sorted list of the circuit qubit indices that were measured, if the task was
+                prepared with ``trim_measurements=True`` (available as ``task.meas_qubits``). Must be
+                given together with ``circuit_num_qubits``. If ``None``, all the qubits are assumed to
+                be measured, which gives wrong results for trimmed data.
+            circuit_num_qubits: The total number of qubits in the circuit. Used together with
+                ``meas_qubits`` to expand the data back to the full width. Must be given together
+                with ``meas_qubits``.
 
         Returns:
             A PubResult which contains the following fields:
@@ -529,6 +575,7 @@ class PEA(MitigationTask):
             ValueError: If ``item_result['_meas']`` has invalid number of axes.
             ValueError: If ``param_shape`` and ``observables.shape`` cannot be broadcasted against each other.
             ValueError: If ``noise_factors`` is under-specified for any extrapolator.
+            ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
         """
         try:
             data = item_result["_meas"].copy()
@@ -536,6 +583,12 @@ class PEA(MitigationTask):
             raise ValueError(
                 "Dedicated creg ``'_meas'`` is missing from one of the results."
             ) from ex
+
+        # Expand compressed measurement data back to full-circuit width, so that all downstream
+        # postprocessing can use the observable qubit indices without any remapping.
+        data, meas_flips = _expand_meas_data_and_flips(
+            data, item_result.get("measurement_flips._meas", None), meas_qubits, circuit_num_qubits
+        )
 
         _validate_noise_factors(noise_factors, extrapolator)
 
@@ -602,7 +655,6 @@ class PEA(MitigationTask):
                 )
 
         # Apply measurement flips if present
-        meas_flips = item_result.get("measurement_flips._meas", None)
         if meas_flips is not None:
             data ^= meas_flips
 
@@ -646,4 +698,9 @@ class PEA(MitigationTask):
         return PubResult(data=data_bin, metadata={"selected_extrapolators": selected_extrapolators})
 
 
-VERSION_TO_POSTPROCESSOR = {"0.1": PEA.compute_expectation_value_pea}
+# Both versions share the same postprocessor. Version 0.2 exists because older releases
+# do not support it.
+VERSION_TO_POSTPROCESSOR = {
+    "0.1": PEA.compute_expectation_value_pea,
+    "0.2": PEA.compute_expectation_value_pea,
+}
