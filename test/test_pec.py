@@ -1085,10 +1085,32 @@ def _mock_slc_noise_maps(
     return noise_maps
 
 
-def _compute_slc_bounds(pec: PEC, circuit: QuantumCircuit, observable, **kwargs):
-    """Compute and return the forward and backward SLC bounds of ``circuit``."""
-    forward = pec.compute_slc_forward_bounds(observable, circuit, **kwargs)
-    backward = pec.compute_slc_backward_bounds(circuit, **kwargs)
+def _compute_slc_bounds(
+    pec: PEC,
+    circuit: QuantumCircuit,
+    observable,
+    coupling_map: CouplingMap | None = None,
+    custom_boxing_options: dict | None = None,
+):
+    """Compute the SLC bounds with `qiskit_addon_slc`, set them on ``pec`` and return them."""
+    from qiskit_addon_slc.bounds import (
+        compute_backward_bounds,
+        compute_forward_bounds,
+        tighten_with_speed_limit,
+    )
+
+    boxed_circuit, noise_model_paulis = pec.get_slc_bounds_computation_input(
+        circuit, coupling_map, custom_boxing_options
+    )
+    forward = tighten_with_speed_limit(
+        compute_forward_bounds(boxed_circuit, noise_model_paulis, observable),
+        boxed_circuit,
+        noise_model_paulis,
+        observable,
+    )
+    backward = compute_backward_bounds(boxed_circuit, noise_model_paulis)
+    pec.slc_forward_bounds = forward
+    pec.slc_backward_bounds = backward
     return forward, backward
 
 
@@ -1110,13 +1132,13 @@ class TestPECSlc(unittest.TestCase):
         ):
             self.assertIsNone(getattr(pec, name))
 
-    # -- compute_slc_forward_bounds / compute_slc_backward_bounds -----------
+    # -- get_slc_bounds_computation_input and bounds properties -------------
 
     def test_compute_bounds_raises_when_slc_missing(self):
         """Without the optional dependency, a ``MissingOptionalLibraryError`` must be raised."""
         with patch.object(HAS_SLC, "_bool", False):
             with self.assertRaises(MissingOptionalLibraryError):
-                _compute_slc_bounds(PEC(), _simple_circuit(), SparsePauliOp("ZZ"))
+                PEC().get_slc_bounds_computation_input(_simple_circuit())
             with self.assertRaises(MissingOptionalLibraryError):
                 PEC().compute_local_scales_using_slc({})
 

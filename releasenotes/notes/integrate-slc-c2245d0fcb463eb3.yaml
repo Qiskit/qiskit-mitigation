@@ -1,6 +1,6 @@
 ---
 features:
   - |
-    Add new functions to the PEC class - compute_slc_forward_bounds, compute_slc_backward_bounds and compute_local_scales_using_slc, which allow 
+    Add new functions to the PEC class - get_slc_bounds_computation_input and compute_local_scales_using_slc, which allow 
     integrating shaded light-cones bounds into the PEC mitigation in order to reduce the sampling overhead of the 
     mitigation in the price of tolerating some pre-determined bias in the result.
