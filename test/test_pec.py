@@ -1085,6 +1085,13 @@ def _mock_slc_noise_maps(
     return noise_maps
 
 
+def _compute_slc_bounds(pec: PEC, circuit: QuantumCircuit, observable, **kwargs):
+    """Compute and return the forward and backward SLC bounds of ``circuit``."""
+    forward = pec.compute_slc_forward_bounds(observable, circuit, **kwargs)
+    backward = pec.compute_slc_backward_bounds(circuit, **kwargs)
+    return forward, backward
+
+
 class TestPECSlc(unittest.TestCase):
     """Tests for the shaded light cones (SLC) integration of :class:`PEC`."""
 
@@ -1103,15 +1110,44 @@ class TestPECSlc(unittest.TestCase):
         ):
             self.assertIsNone(getattr(pec, name))
 
-    # -- compute_bounds_using_slc -------------------------------------------
+    # -- compute_slc_forward_bounds / compute_slc_backward_bounds -----------
 
     def test_compute_bounds_raises_when_slc_missing(self):
         """Without the optional dependency, a ``MissingOptionalLibraryError`` must be raised."""
         with patch.object(HAS_SLC, "_bool", False):
             with self.assertRaises(MissingOptionalLibraryError):
-                PEC().compute_bounds_using_slc(_simple_circuit(), SparsePauliOp("ZZ"))
+                _compute_slc_bounds(PEC(), _simple_circuit(), SparsePauliOp("ZZ"))
             with self.assertRaises(MissingOptionalLibraryError):
                 PEC().compute_local_scales_using_slc({})
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_bounds_properties_get_and_set(self):
+        """The bounds properties are ``None`` initially, and return what was set."""
+        pec = PEC()
+        self.assertIsNone(pec.slc_forward_bounds)
+        self.assertIsNone(pec.slc_backward_bounds)
+        pec.slc_forward_bounds = {"m0": 1}
+        pec.slc_backward_bounds = {"m0": 2}
+        self.assertEqual(pec.slc_forward_bounds, {"m0": 1})
+        self.assertEqual(pec.slc_backward_bounds, {"m0": 2})
+        self.assertEqual(pec._slc_forward_bounds, {"m0": 1})
+        self.assertEqual(pec._slc_backward_bounds, {"m0": 2})
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_get_bounds_input_raises_without_circuit(self):
+        """Without a circuit input and a saved circuit, a ``ValueError`` must be raised."""
+        with self.assertRaisesRegex(ValueError, "No circuit was given"):
+            PEC().get_slc_bounds_computation_input()
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_get_bounds_input_uses_saved_circuit_and_boxed_circuit(self):
+        """A ``None`` circuit uses the saved circuit, and the saved boxed circuit is reused."""
+        pec = PEC()
+        qc = _simple_circuit()
+        boxed, _ = pec.get_slc_bounds_computation_input(qc)
+        boxed_again, noise_model_paulis = pec.get_slc_bounds_computation_input()
+        self.assertIs(boxed_again, boxed)
+        self.assertGreater(len(noise_model_paulis), 0)
 
     @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_compute_bounds_raises_on_parametric_circuit(self):
@@ -1119,7 +1155,7 @@ class TestPECSlc(unittest.TestCase):
         qc = QuantumCircuit(1)
         qc.rx(Parameter("a"), 0)
         with self.assertRaisesRegex(ValueError, "unbounded parameters"):
-            PEC().compute_bounds_using_slc(qc, SparsePauliOp("Z"))
+            _compute_slc_bounds(PEC(), qc, SparsePauliOp("Z"))
 
     @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_compute_bounds_stores_and_returns_bounds(self):
@@ -1132,8 +1168,8 @@ class TestPECSlc(unittest.TestCase):
             "inject_noise_strategy": "individual_modification",
         }
 
-        forward, backward = pec.compute_bounds_using_slc(
-            qc, obs, custom_boxing_options=slc_boxing_options
+        forward, backward = _compute_slc_bounds(
+            pec, qc, obs, custom_boxing_options=slc_boxing_options
         )
 
         self.assertIsInstance(forward, dict)
@@ -1189,7 +1225,7 @@ class TestPECSlc(unittest.TestCase):
         qc = _simple_circuit()
         obs = SparsePauliOp("ZZ")
         cmap = CouplingMap([(0, 1), (1, 0)])
-        forward, backward = pec.compute_bounds_using_slc(qc, obs, coupling_map=cmap)
+        forward, backward = _compute_slc_bounds(pec, qc, obs, coupling_map=cmap)
         self.assertIsInstance(forward, dict)
         self.assertIsInstance(backward, dict)
         key = next(iter(forward))
@@ -1234,10 +1270,30 @@ class TestPECSlc(unittest.TestCase):
     def test_compute_bounds_does_not_modify_custom_boxing_options(self):
         """The user supplied ``custom_boxing_options`` must be copied, not modified."""
         options = {"enable_measures": True}
-        PEC().compute_bounds_using_slc(
-            _simple_circuit(), SparsePauliOp("ZZ"), custom_boxing_options=options
+        _compute_slc_bounds(
+            PEC(), _simple_circuit(), SparsePauliOp("ZZ"), custom_boxing_options=options
         )
         self.assertEqual(options, {"enable_measures": True})
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_get_bounds_input_sets_default_inject_noise_strategy(self):
+        """An unspecified ``inject_noise_strategy`` must default to ``individual_modification``."""
+        pec = PEC()
+        options = {"enable_measures": True}
+        pec.get_slc_bounds_computation_input(_simple_circuit(), custom_boxing_options=options)
+        self.assertEqual(
+            pec.custom_boxing_options["inject_noise_strategy"], "individual_modification"
+        )
+        self.assertNotIn("inject_noise_strategy", options)
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_get_bounds_input_raises_on_wrong_inject_noise_strategy(self):
+        """Any ``inject_noise_strategy`` other than ``individual_modification`` must raise."""
+        with self.assertRaisesRegex(ValueError, "individual_modification"):
+            PEC().get_slc_bounds_computation_input(
+                _simple_circuit(),
+                custom_boxing_options={"inject_noise_strategy": "no_modification"},
+            )
 
     # -- compute_local_scales_using_slc -------------------------------------
 
@@ -1248,12 +1304,35 @@ class TestPECSlc(unittest.TestCase):
             PEC().compute_local_scales_using_slc({})
 
     @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
-    def test_compute_local_scales_raises_without_bounds_backward_only(self):
-        """Each of the bounds is required."""
-        pec = PEC()
-        pec._slc_forward_bounds = {}
-        with self.assertRaisesRegex(ValueError, "Missing bounds parameters"):
-            pec.compute_local_scales_using_slc({})
+    def test_compute_local_scales_with_single_bounds(self):
+        """Local scales can be computed when only the forward or only the backward bounds exist."""
+        qc = _simple_circuit()
+        obs = SparsePauliOp("ZZ")
+        slc_boxing_options = {
+            "add_tags": "unique_box",
+            "inject_noise_strategy": "individual_modification",
+        }
+        full = PEC()
+        forward, backward = _compute_slc_bounds(
+            full, qc, obs, custom_boxing_options=slc_boxing_options
+        )
+        noise_maps = _mock_slc_noise_maps(full, qc, slc_boxing_options)
+
+        for name, bounds in (("forward", forward), ("backward", backward)):
+            with self.subTest(bounds=name):
+                pec = PEC()
+                pec.get_slc_bounds_computation_input(qc, custom_boxing_options=slc_boxing_options)
+                if name == "forward":
+                    pec.slc_forward_bounds = bounds
+                else:
+                    pec.slc_backward_bounds = bounds
+                scales, cost, bias = pec.compute_local_scales_using_slc(
+                    noise_maps, sampling_cost_budget=10.0
+                )
+                self.assertEqual(scales.keys(), bounds.keys())
+                self.assertEqual(pec._slc_merged_bounds.keys(), bounds.keys())
+                self.assertGreaterEqual(cost, 1.0)
+                self.assertGreaterEqual(bias, 0.0)
 
     @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_compute_local_scales_raises_without_circuit(self):
@@ -1274,7 +1353,7 @@ class TestPECSlc(unittest.TestCase):
             "add_tags": "unique_box",
             "inject_noise_strategy": "individual_modification",
         }
-        pec.compute_bounds_using_slc(qc, obs, custom_boxing_options=slc_boxing_options)
+        _compute_slc_bounds(pec, qc, obs, custom_boxing_options=slc_boxing_options)
         noise_maps = _mock_slc_noise_maps(pec, qc, slc_boxing_options)
 
         scales, cost, bias = pec.compute_local_scales_using_slc(
@@ -1317,7 +1396,7 @@ class TestPECSlc(unittest.TestCase):
             "add_tags": "unique_box",
             "inject_noise_strategy": "individual_modification",
         }
-        pec.compute_bounds_using_slc(qc, obs, custom_boxing_options=slc_boxing_options)
+        _compute_slc_bounds(pec, qc, obs, custom_boxing_options=slc_boxing_options)
         noise_maps = _mock_slc_noise_maps(pec, qc, slc_boxing_options)
 
         scales, cost, bias = pec.compute_local_scales_using_slc(noise_maps, bias_tolerance=0.01)
@@ -1357,7 +1436,7 @@ class TestPECSlc(unittest.TestCase):
             "add_tags": "unique_box",
             "inject_noise_strategy": "individual_modification",
         }
-        pec.compute_bounds_using_slc(qc, obs, custom_boxing_options=slc_boxing_options)
+        _compute_slc_bounds(pec, qc, obs, custom_boxing_options=slc_boxing_options)
         noise_maps = _mock_slc_noise_maps(pec, qc, slc_boxing_options)
 
         with self.assertWarnsRegex(UserWarning, "Bias tolerance exceeds unmitigated bias"):
@@ -1376,7 +1455,7 @@ class TestPECSlc(unittest.TestCase):
             "add_tags": "unique_box",
             "inject_noise_strategy": "individual_modification",
         }
-        pec.compute_bounds_using_slc(qc, obs, custom_boxing_options=slc_boxing_options)
+        _compute_slc_bounds(pec, qc, obs, custom_boxing_options=slc_boxing_options)
         noise_maps = _mock_slc_noise_maps(pec, qc, slc_boxing_options)
 
         pec.boxed_circuit = None
@@ -1545,7 +1624,7 @@ class TestPECSlc(unittest.TestCase):
             "add_tags": "unique_box",
             "inject_noise_strategy": "individual_modification",
         }
-        pec.compute_bounds_using_slc(qc, obs, custom_boxing_options=slc_boxing_options)
+        _compute_slc_bounds(pec, qc, obs, custom_boxing_options=slc_boxing_options)
         noise_maps = _mock_slc_noise_maps(pec, qc, slc_boxing_options)
         pec.compute_local_scales_using_slc(noise_maps, sampling_cost_budget=10.0)
 
@@ -1575,7 +1654,7 @@ class TestPECSlc(unittest.TestCase):
             "add_tags": "unique_box",
             "inject_noise_strategy": "individual_modification",
         }
-        pec.compute_bounds_using_slc(qc, obs, custom_boxing_options=slc_boxing_options)
+        _compute_slc_bounds(pec, qc, obs, custom_boxing_options=slc_boxing_options)
         noise_maps = _mock_slc_noise_maps(pec, qc, slc_boxing_options)
         pec.compute_local_scales_using_slc(noise_maps, sampling_cost_budget=10.0)
         pec._slc_reduced_gamma = None

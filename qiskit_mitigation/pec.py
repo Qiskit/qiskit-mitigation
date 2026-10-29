@@ -25,7 +25,14 @@ from qiskit import QuantumCircuit
 from qiskit.primitives import DataBin, PubResult
 from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.observables_array import ObservablesArray
-from qiskit.quantum_info import Pauli, PauliLindbladMap, PauliList, SparseObservable, SparsePauliOp
+from qiskit.quantum_info import (
+    Pauli,
+    PauliLindbladMap,
+    PauliList,
+    QubitSparsePauliList,
+    SparseObservable,
+    SparsePauliOp,
+)
 from qiskit.transpiler import CouplingMap
 from qiskit.utils import LazyImportTester
 from samplomatic import InjectNoise, build
@@ -62,6 +69,9 @@ HAS_SLC = LazyImportTester(
     name="qiskit-addon-slc",
     install="pip install qiskit-addon-slc",
 )
+
+if HAS_SLC:  # pragma: no branch
+    from qiskit_addon_slc.bounds.commutator_bounds import Bounds
 
 
 class PEC(MitigationTask):
@@ -222,7 +232,7 @@ class PEC(MitigationTask):
                 A value greater than one corresponds to amplifying the learned noise.
                 A value of "slc_local_scales" corresponds to partially removing the learned noise of each box according to the
                 local scales learned using shaded light-cones (slc). In order to compute those local scales, first use
-                ``compute_bounds_using_slc`` and ``compute_local_scales_using_slc`` functions.
+                ``compute_slc_forward_bounds``, ``compute_slc_backward_bounds`` and ``compute_local_scales_using_slc`` functions.
                 If ``"auto"``, the value in the range ``[0, 1]`` will be chosen automatically by the formula ``1 - log(max_overhead) / log(gamma^2)``.
             max_sampling_overhead: If scale_randomizations_by_gamma is True, limit the multiplicative ratio of the number of randomizations.
 
@@ -462,52 +472,145 @@ class PEC(MitigationTask):
             measure_noise_data=measure_noise_data,
         )
 
+    @property
     @HAS_SLC.require_in_call
-    def compute_bounds_using_slc(
+    def slc_forward_bounds(self) -> Bounds | None:
+        """The forward-evolved unequal-time commutator bounds of the target circuit.
+
+        The bounds are computed by :meth:`compute_slc_forward_bounds`,
+        which uses :func:`qiskit_addon_slc.bounds.compute_forward_bounds` and
+        :func:`qiskit_addon_slc.bounds.tighten_with_speed_limit`.
+        They are used by :meth:`compute_local_scales_using_slc`, and can also be set manually, for example
+        to reuse bounds that were computed and saved earlier.
+        ``None`` if the bounds were not computed or set yet.
+
+        .. note::
+            This property uses the optional dependency of `qiskit-addon-slc` package.
+
+        Raises:
+            MissingOptionalLibraryError: if `qiskit-addon-slc` package is not installed.
+        """
+        return self._slc_forward_bounds
+
+    @slc_forward_bounds.setter
+    @HAS_SLC.require_in_call
+    def slc_forward_bounds(self, forward_bounds: Bounds):
+        """Set the forward-evolved unequal-time commutator bounds.
+
+        Args:
+            forward_bounds: The forward bounds, in the format returned by
+                :func:`qiskit_addon_slc.bounds.compute_forward_bounds`.
+
+        Raises:
+            MissingOptionalLibraryError: if `qiskit-addon-slc` package is not installed.
+        """
+        self._slc_forward_bounds = forward_bounds
+
+    @property
+    @HAS_SLC.require_in_call
+    def slc_backward_bounds(self) -> Bounds | None:
+        """The backward-evolved unequal-time commutator bounds of the target circuit.
+
+        The bounds are computed by :meth:`compute_slc_backward_bounds`,
+        which uses :func:`qiskit_addon_slc.bounds.compute_backward_bounds`.
+        They are used by :meth:`compute_local_scales_using_slc`, and can also be set manually, for example
+        to reuse bounds that were computed and saved earlier.
+        ``None`` if the bounds were not computed or set yet.
+
+        .. note::
+            This property uses the optional dependency of `qiskit-addon-slc` package.
+
+        Raises:
+            MissingOptionalLibraryError: if `qiskit-addon-slc` package is not installed.
+        """
+        return self._slc_backward_bounds
+
+    @slc_backward_bounds.setter
+    @HAS_SLC.require_in_call
+    def slc_backward_bounds(self, backward_bounds: Bounds):
+        """Set the backward-evolved unequal-time commutator bounds.
+
+        Args:
+            backward_bounds: The backward bounds, in the format returned by
+                :func:`qiskit_addon_slc.bounds.compute_backward_bounds`.
+
+        Raises:
+            MissingOptionalLibraryError: if `qiskit-addon-slc` package is not installed.
+        """
+        self._slc_backward_bounds = backward_bounds
+
+    @HAS_SLC.require_in_call
+    def get_slc_bounds_computation_input(
         self,
-        circuit: QuantumCircuit,
-        observable: Pauli | PauliList | SparseObservable | SparsePauliOp,
+        circuit: QuantumCircuit | None = None,
         coupling_map: CouplingMap | None = None,
         custom_boxing_options: dict | None = None,
-    ) -> tuple[dict[str, PauliLindbladMap], dict[str, PauliLindbladMap]]:
-        """Compute the forward and backward evolved unequal-time commutator bounds for all Pauli error terms of each noisy layer in the target circuit, using `qiskit-addon-slc` package.
+    ) -> tuple[QuantumCircuit, dict[str, QubitSparsePauliList]]:
+        """Prepare the inputs required for computing the shaded light-cone (SLC) bounds of a circuit.
 
-        Learned Pauli error rates of each Pauli error term can be used to merge the bounds in order to compute ``local_scales`` using the ``compute_local_scales_using_slc`` function.
+        The circuit is boxed, and the Pauli error terms of each noisy layer are generated using
+        :func:`qiskit_addon_slc.utils.generate_noise_model_paulis`.
+        The circuit, the boxed circuit and the boxing options are saved in the class instance.
+        If the instance already holds a boxed circuit of the given ``circuit`` (for example, from a previous call to this function or
+        to ``prepare``), and ``custom_boxing_options`` is ``None`` or equal to the saved boxing options, the saved boxed circuit is reused instead of
+        boxing the circuit again.
+
+        .. important::
+            The bounds are keyed by the ``modifier_ref`` of each noisy box, so
+            ``custom_boxing_options["inject_noise_strategy"]`` must be ``"individual_modification"``
+            (see :func:`qiskit_addon_slc.bounds.compute_forward_bounds`).
+            If it is not specified, it is set to ``"individual_modification"``. If ``custom_boxing_options`` is ``None``
+            and the saved boxing options are used, the same rule applies to them.
 
         .. note::
             This function uses the optional dependency of `qiskit-addon-slc` package.
 
         Args:
-            circuit: The target circuit to compute bounds for.
-            observable: The target observable to be measured. In the current implementation, the observable must contain only a single Pauli term.
-                For a multi Pauli observable, you will need to compute each target Pauli separately.
+            circuit: The target circuit to compute bounds for. If ``None``, the circuit saved in the class instance is used.
             coupling_map: The coupling map of the backend on which the instructions have been laid out. Used to generate all the relevant Pauli error terms.
                 If ``None``, a 1d line of qubits is assumed.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
 
         Returns:
-            * A dict of the forward unequal-time commutator bounds.
-            * A dict of the backward unequal-time commutator bounds.
+            * The boxed circuit.
+            * A dict mapping the ref of each noise model to the Pauli error terms to consider.
+              Can be given as the ``noise_model_paulis`` input of the `qiskit-addon-slc` bounds functions.
 
         Raises:
             MissingOptionalLibraryError: if `qiskit-addon-slc` package is not installed.
+            ValueError: If both the ``circuit`` input and the circuit saved in the class instance are ``None``.
             ValueError: If the circuit has unbounded parameters.
+            ValueError: If ``custom_boxing_options["inject_noise_strategy"]`` is specified and is not ``"individual_modification"``.
         """
-        from qiskit_addon_slc.bounds import (
-            compute_backward_bounds,
-            compute_forward_bounds,
-            tighten_with_speed_limit,
-        )
         from qiskit_addon_slc.utils import generate_noise_model_paulis
 
+        if circuit is None:
+            circuit = self.circuit
+        if circuit is None:
+            raise ValueError(
+                "No circuit was given and there is no circuit saved in the class instance."
+            )
         if circuit.parameters:
             raise ValueError("Can't compute bounds on a circuit with unbounded parameters.")
-        self.circuit = circuit
+
+        if custom_boxing_options is None and circuit is self.circuit:
+            custom_boxing_options = self.custom_boxing_options
         custom_boxing_options = (
             {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
         )
-        boxed_circuit = self._box_circuit(circuit, custom_boxing_options)
-        self.boxed_circuit = boxed_circuit
+        if custom_boxing_options.get("inject_noise_strategy", None) is None:
+            custom_boxing_options["inject_noise_strategy"] = "individual_modification"
+        elif custom_boxing_options["inject_noise_strategy"] != "individual_modification":
+            raise ValueError(
+                'custom_boxing_options["inject_noise_strategy"] must be ``individual_modification`` in order to compute slc bounds.'
+            )
+
+        boxed_circuit = self._get_saved_boxed_circuit(circuit, custom_boxing_options)
+        if boxed_circuit is None:
+            self.circuit = circuit
+            self.custom_boxing_options = custom_boxing_options
+            boxed_circuit = self._box_circuit(circuit, custom_boxing_options)
+            self.boxed_circuit = boxed_circuit
         pec_layers = [
             layer
             for layer in self.find_unique_layers(circuit, custom_boxing_options)
@@ -515,16 +618,149 @@ class PEC(MitigationTask):
         ]
 
         noise_model_paulis = generate_noise_model_paulis(pec_layers, coupling_map, circuit)
+        return boxed_circuit, noise_model_paulis
 
-        forward_bounds = compute_forward_bounds(boxed_circuit, noise_model_paulis, observable)
-        backward_bounds = compute_backward_bounds(boxed_circuit, noise_model_paulis)
+    @HAS_SLC.require_in_call
+    def compute_slc_forward_bounds(
+        self,
+        observable: Pauli | PauliList | SparseObservable | SparsePauliOp,
+        circuit: QuantumCircuit | None = None,
+        coupling_map: CouplingMap | None = None,
+        custom_boxing_options: dict | None = None,
+        *,
+        evolution_max_terms: int = 1_000_000,
+        eigval_max_qubits: int = 14,
+        atol_simplify: float = 1e-8,
+        atol_eigenvalue: float = 1e-10,
+        max_num_boxes: int | None = None,
+        num_processes: int = 1,
+        timeout: float | None = None,
+    ) -> Bounds:
+        """Compute the forward-evolved unequal-time commutator bounds for all Pauli error terms of each noisy layer in the target circuit.
 
+        The inputs are prepared using :meth:`get_slc_bounds_computation_input`, the bounds are computed using
+        :func:`qiskit_addon_slc.bounds.compute_forward_bounds` and then tightened using
+        :func:`qiskit_addon_slc.bounds.tighten_with_speed_limit`.
+        The tightened bounds are saved in the class instance (see the ``slc_forward_bounds`` property).
+        See :func:`qiskit_addon_slc.bounds.compute_forward_bounds` for more details on the arguments
+        ``evolution_max_terms``, ``eigval_max_qubits``, ``atol_simplify``, ``atol_eigenvalue``, ``max_num_boxes``,
+        ``num_processes`` and ``timeout``.
+
+        .. note::
+            This function uses the optional dependency of `qiskit-addon-slc` package.
+
+        Args:
+            observable: The target observable to be measured. In the current implementation, the observable must contain only a single Pauli term.
+                For a multi Pauli observable, you will need to compute each target Pauli separately.
+            circuit: The target circuit to compute bounds for. If ``None``, the circuit saved in the class instance is used.
+            coupling_map: The coupling map of the backend on which the instructions have been laid out. Used to generate all the relevant Pauli error terms.
+                If ``None``, a 1d line of qubits is assumed.
+            custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+            evolution_max_terms: The maximum number of operator terms to keep track of during the evolution.
+            eigval_max_qubits: The maximum number of qubits of a commutator for which the eigenvalue will still be attempted to be computed.
+                When this value is exceeded, the bound is approximated via a simpler and looser triangle inequality.
+            atol_simplify: The absolute tolerance used for trimming terms from the commutator.
+                Loosening this tolerance renders the computation of the eigenvalue cheaper but less accurate.
+            atol_eigenvalue: The absolute tolerance used for detecting convergence of the commutator's eigenvalue.
+                Loosening this tolerance results in a less accurate eigenvalue.
+            max_num_boxes: The maximum number of boxes for which to compute bounds. Bounds for any additional boxes
+                are given the trivial upper bound value of 2.0. ``None`` means no limit.
+            num_processes: The number of parallel processes to use.
+            timeout: An optional timeout (in seconds) after which all remaining layers are filled with trivial bounds of 2.0.
+                This is not a strict timeout, the layer being processed when the timeout is reached completes normally.
+
+        Returns:
+            The tightened forward unequal-time commutator bounds.
+
+        Raises:
+            MissingOptionalLibraryError: if `qiskit-addon-slc` package is not installed.
+            ValueError: If both the ``circuit`` input and the circuit saved in the class instance are ``None``.
+            ValueError: If the circuit has unbounded parameters.
+            NotImplementedError: If the observable contains more than a single Pauli term.
+        """
+        from qiskit_addon_slc.bounds import compute_forward_bounds, tighten_with_speed_limit
+
+        boxed_circuit, noise_model_paulis = self.get_slc_bounds_computation_input(
+            circuit, coupling_map, custom_boxing_options
+        )
+        forward_bounds = compute_forward_bounds(
+            boxed_circuit,
+            noise_model_paulis,
+            observable,
+            evolution_max_terms=evolution_max_terms,
+            eigval_max_qubits=eigval_max_qubits,
+            atol_simplify=atol_simplify,
+            atol_eigenvalue=atol_eigenvalue,
+            max_num_boxes=max_num_boxes,
+            num_processes=num_processes,
+            timeout=timeout,
+        )
         forward_bounds_tighter = tighten_with_speed_limit(
             forward_bounds, boxed_circuit, noise_model_paulis, observable
         )
-        self._slc_forward_bounds = forward_bounds_tighter
-        self._slc_backward_bounds = backward_bounds
-        return forward_bounds_tighter, backward_bounds
+        self.slc_forward_bounds = forward_bounds_tighter
+        return forward_bounds_tighter
+
+    @HAS_SLC.require_in_call
+    def compute_slc_backward_bounds(
+        self,
+        circuit: QuantumCircuit | None = None,
+        coupling_map: CouplingMap | None = None,
+        custom_boxing_options: dict | None = None,
+        *,
+        evolution_max_terms: int = 1_000_000,
+        max_num_boxes: int | None = None,
+        num_processes: int = 1,
+        timeout: float | None = None,
+    ) -> Bounds:
+        """Compute the backward-evolved unequal-time commutator bounds for all Pauli error terms of each noisy layer in the target circuit.
+
+        The inputs are prepared using :meth:`get_slc_bounds_computation_input` and the bounds are computed using
+        :func:`qiskit_addon_slc.bounds.compute_backward_bounds`.
+        The bounds are saved in the class instance (see the ``slc_backward_bounds`` property).
+        The backward bounds do not depend on the observable.
+        See :func:`qiskit_addon_slc.bounds.compute_backward_bounds` for more details on the arguments
+        ``evolution_max_terms``, ``max_num_boxes``, ``num_processes`` and ``timeout``.
+
+        .. note::
+            This function uses the optional dependency of `qiskit-addon-slc` package.
+
+        Args:
+            circuit: The target circuit to compute bounds for. If ``None``, the circuit saved in the class instance is used.
+            coupling_map: The coupling map of the backend on which the instructions have been laid out. Used to generate all the relevant Pauli error terms.
+                If ``None``, a 1d line of qubits is assumed.
+            custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+            evolution_max_terms: The maximum number of operator terms to keep track of during the evolution.
+                If the operator exceeds this size, the smallest terms are truncated.
+            max_num_boxes: The maximum number of boxes for which to compute bounds. Bounds for any additional boxes
+                are given the trivial upper bound value of 2.0. ``None`` means no limit.
+            num_processes: The number of parallel processes to use.
+            timeout: An optional timeout (in seconds) after which all remaining layers are filled with trivial bounds of 2.0.
+                This is not a strict timeout, the layer being processed when the timeout is reached completes normally.
+
+        Returns:
+            The backward unequal-time commutator bounds.
+
+        Raises:
+            MissingOptionalLibraryError: if `qiskit-addon-slc` package is not installed.
+            ValueError: If both the ``circuit`` input and the circuit saved in the class instance are ``None``.
+            ValueError: If the circuit has unbounded parameters.
+        """
+        from qiskit_addon_slc.bounds import compute_backward_bounds
+
+        boxed_circuit, noise_model_paulis = self.get_slc_bounds_computation_input(
+            circuit, coupling_map, custom_boxing_options
+        )
+        backward_bounds = compute_backward_bounds(
+            boxed_circuit,
+            noise_model_paulis,
+            evolution_max_terms=evolution_max_terms,
+            max_num_boxes=max_num_boxes,
+            num_processes=num_processes,
+            timeout=timeout,
+        )
+        self.slc_backward_bounds = backward_bounds
+        return backward_bounds
 
     @HAS_SLC.require_in_call
     def compute_local_scales_using_slc(
@@ -534,6 +770,12 @@ class PEC(MitigationTask):
         bias_tolerance: float = 0.0,
     ) -> tuple[dict[str, np.ndarray], float, float]:
         """Merge the pre-computed forward and backward bounds and compute local scales which are used to specify which individual error terms to mitigate.
+
+        The bounds used for the calculation are those stored in the class instance (see the ``slc_forward_bounds`` and
+        ``slc_backward_bounds`` properties), either computed by :meth:`compute_slc_forward_bounds` and
+        :meth:`compute_slc_backward_bounds` or set manually.
+        They are merged using :func:`qiskit_addon_slc.bounds.merge_bounds`. As in this function, only one of
+        the forward and backward bounds is required. If one of them is missing, the other is used as is.
 
         Either the sampling_cost_budget or bias_tolerance must be specified. The former puts an upper bound on the sampling cost while the latter puts an upper bound on the remaining bias to tolerate.
 
@@ -554,14 +796,14 @@ class PEC(MitigationTask):
 
         Raises:
             MissingOptionalLibraryError: if `qiskit-addon-slc` package is not installed.
-            ValueError: If bounds parameters or circuit are missing.
+            ValueError: If both the forward and backward bounds are missing, or if the circuit is missing.
         """
         from qiskit_addon_slc.bounds import compute_local_scales, merge_bounds
 
-        if self._slc_forward_bounds is None or self._slc_backward_bounds is None:
+        if self._slc_forward_bounds is None and self._slc_backward_bounds is None:
             raise ValueError(
                 "Missing bounds parameters. Computation of bounds is needed to compute local scales. "
-                "``compute_bounds_using_slc`` function can be used to compute bounds."
+                "``compute_slc_forward_bounds`` and ``compute_slc_backward_bounds`` functions can be used to compute bounds."
             )
         if self.circuit is None and self.boxed_circuit is None:
             raise ValueError("Missing circuit parameter in the class instance attributes.")
