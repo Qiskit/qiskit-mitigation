@@ -119,8 +119,8 @@ class PEC(MitigationTask):
         super().__init__()
         self.gamma = None
         # attributes relevant for slc integration
-        self._slc_forward_bounds = None
-        self._slc_backward_bounds = None
+        self._slc_forward_bounds: Bounds | None = None
+        self._slc_backward_bounds: Bounds | None = None
         self._slc_merged_bounds = None
         self._slc_local_scales = None
         self._slc_reduced_gamma = None
