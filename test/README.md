@@ -47,6 +47,30 @@ $ tox -e py311,py312
 
 These environments execute all tests using [pytest], which supports its own simple style of tests, in addition to [unittest]-style tests.
 
+## Optional dependencies
+
+Some features need an optional dependency, which is installed through an extra (`pip install qiskit-mitigation[slc]`; the `all` extra pulls in every one of them).  Each optional dependency has a lazy import tester and every test that needs one is guarded with it:
+
+```python
+from qiskit_mitigation.pec import HAS_SLC
+
+
+@pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+def test_something_traced(): ...
+```
+
+The `py##` environments deliberately install none of the optional dependencies.  Running them therefore exercises everything with the optional dependencies absent, so a test that forgot its guard fails rather than passing unnoticed.  Expect the guarded tests to skip there; a _failure_ means a missing guard.
+
+The `optional` and `py##-optional` environments are the exact complement: they install the `all` extra and select every test that those guards skip (`pytest -m skipif`), so they get exercised with the dependencies present.
+
+```sh
+$ tox -e py310-optional
+```
+
+Since the selection is by the `skipif` marker, guarding a new test is all it takes to have it selected; there is no list of tests or files to maintain.  For the same reason, a `skipif` that is unrelated to an optional dependency gets selected too, which is harmless: such a test merely runs a second time.
+
+The [coverage environment](#coverage-environment) also installs the `all` extra, so that the code paths behind the optional dependencies count towards the coverage.
+
 ## Coverage environment
 
 The `coverage` environment uses [Coverage.py] to ensure that the fraction of code tested by pytest is above some threshold (enforced to be 100% for new modules).  A detailed, line-by-line coverage report can be viewed by navigating to `htmlcov/index.html` in a web browser.
