@@ -1,0 +1,4 @@
+---
+features:
+  - |
+    Gate folding now supports most two-qubit gates.

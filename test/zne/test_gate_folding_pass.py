@@ -19,7 +19,26 @@ import ddt
 import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit import Parameter
-from qiskit.circuit.library import CXGate, CYGate, CZGate, ECRGate, SwapGate
+from qiskit.circuit.library import (
+    CHGate,
+    CPhaseGate,
+    CRXGate,
+    CRYGate,
+    CRZGate,
+    CSdgGate,
+    CSGate,
+    CSXGate,
+    CXGate,
+    CYGate,
+    CZGate,
+    ECRGate,
+    RXXGate,
+    RYYGate,
+    RZXGate,
+    RZZGate,
+    SwapGate,
+    iSwapGate,
+)
 from qiskit.converters import circuit_to_dag, dag_to_circuit
 from qiskit.quantum_info import Operator
 from qiskit.transpiler import PassManager
@@ -41,7 +60,29 @@ class TestGateFoldingPass(unittest.TestCase):
 
     def test_default_gate_set(self):
         """Default gate set targets the standard 2-qubit ISA gates."""
-        self.assertEqual(SUPPORTED_FOLDED_GATES, (ECRGate, CXGate, CYGate, CZGate, SwapGate))
+        self.assertEqual(
+            SUPPORTED_FOLDED_GATES,
+            (
+                ECRGate,
+                CXGate,
+                CYGate,
+                CZGate,
+                SwapGate,
+                RZZGate,
+                RXXGate,
+                RYYGate,
+                RZXGate,
+                iSwapGate,
+                CHGate,
+                CRXGate,
+                CRYGate,
+                CRZGate,
+                CSGate,
+                CSdgGate,
+                CSXGate,
+                CPhaseGate,
+            ),
+        )
 
     def test_noise_factor_one_returns_equal_circuit(self):
         """``noise_factor=1`` leaves the circuit unchanged in content."""
@@ -62,7 +103,7 @@ class TestGateFoldingPass(unittest.TestCase):
         circuit = QuantumCircuit(2)
         circuit.h(0)
         circuit.rz(0.1, 0)
-        circuit.rzz(np.pi / 6, 0, 1)
+        circuit.dcx(0, 1)
         circuit.sx(1)
         folded = fold(circuit, 3.0)
         self.assertEqual(folded, circuit)
@@ -218,11 +259,24 @@ class TestGateFoldingPass(unittest.TestCase):
         folded = fold(circuit, noise_factor)
         self.assertTrue(Operator(circuit).equiv(Operator(folded)))
 
-    @ddt.data(CXGate, CYGate, CZGate, ECRGate, SwapGate)
+    @ddt.data(
+        CXGate, CYGate, CZGate, ECRGate, SwapGate, iSwapGate, CHGate, CSXGate, CSGate, CSdgGate
+    )
     def test_folds_each_default_gate_type(self, gate_cls):
-        """Each gate type in :data:`SUPPORTED_FOLDED_GATES` is folded by the pass."""
+        """Each non-parameterized gate type in :data:`SUPPORTED_FOLDED_GATES` is folded."""
         circuit = QuantumCircuit(2)
         circuit.append(gate_cls(), [0, 1])
         folded = fold(circuit, 3.0)
-        self.assertEqual(folded.count_ops()[gate_cls().name], 3)
+        self.assertEqual(sum(folded.count_ops().values()), 3)
+        self.assertIn(gate_cls().name, folded.count_ops())
+        self.assertTrue(Operator(circuit).equiv(Operator(folded)))
+
+    @ddt.data(RZZGate, RXXGate, RYYGate, RZXGate, CRXGate, CRYGate, CRZGate, CPhaseGate)
+    def test_folds_parameterized_gate_type(self, gate_cls):
+        """Parameterized 2-qubit rotation gates are folded by the pass."""
+        circuit = QuantumCircuit(2)
+        circuit.append(gate_cls(np.pi / 6), [0, 1])
+        folded = fold(circuit, 3.0)
+        self.assertEqual(sum(folded.count_ops().values()), 3)
+        self.assertIn(gate_cls(0.1).name, folded.count_ops())
         self.assertTrue(Operator(circuit).equiv(Operator(folded)))
