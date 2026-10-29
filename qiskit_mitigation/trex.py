@@ -16,10 +16,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from qiskit_mitigation.mitigation_task import MitigationTask
+from typing import Any
 
 import numpy as np
 from qiskit.circuit import ClassicalRegister, QuantumCircuit
@@ -54,12 +51,8 @@ class TREX:
         self.boxed_circuit = None
         self._program_item_index = None
 
-    def _edit_boxing_options(
-        self, mitigation_task: MitigationTask, boxing_options: dict | None
-    ) -> dict:
+    def _edit_boxing_options(self, boxing_options: dict | None) -> dict:
         """Edit boxing options."""
-        self.tasks.append(mitigation_task)
-
         if boxing_options is None:
             return {"enable_measures": True, "measure_annotations": "all"}
         edited_boxing_options = boxing_options.copy()
@@ -109,8 +102,12 @@ class TREX:
     ) -> QuantumProgram:
         """Adds a TREX calibration item to the quantum program.
 
-        The created calibration circuit contains a measurement on all qubits measured in the circuits mitigated by
-        this instance. The classical register of the measurement is named ``_meas``.
+        The created calibration circuit measures the union of the qubits measured by the tasks
+        connected to this instance. A task that does not trim its measurements contributes all the
+        qubits of its circuit. The classical register of the measurement is named ``_meas`` and has
+        ``m + 1`` bits, where ``m`` is the largest measured qubit index, so that column ``i`` of the
+        calibration is always circuit qubit ``i``. Columns of qubits that no task measures are not
+        measured and always hold zeros.
 
         Args:
             num_randomizations: Number of randomizations for the TREX calibration.
@@ -124,10 +121,21 @@ class TREX:
             raise ValueError(
                 "A TREX must be connected to at least one mitigation task to create a calibration task."
             )
-        circuits = [task.circuit for task in self.tasks]
+        cal_qubits = sorted(
+            set().union(
+                *(
+                    task.meas_qubits
+                    if task.meas_qubits is not None
+                    else range(task.circuit.num_qubits)
+                    for task in self.tasks
+                )
+            )
+        )
         self._program_item_index = len(quantum_program.items)
         quantum_program.items.append(
-            self._prepare_calibration_circuit(circuits, num_randomizations, custom_boxing_options)
+            self._prepare_calibration_circuit(
+                max(cal_qubits) + 1, num_randomizations, custom_boxing_options, cal_qubits
+            )
         )
 
         data_for_passthrough = {
@@ -208,29 +216,34 @@ class TREX:
 
     @staticmethod
     def _prepare_calibration_circuit(
-        circuits: Sequence[QuantumCircuit],
+        num_qubits: int,
         num_randomizations: int,
         custom_boxing_options: dict | None = None,
+        meas_qubits: Sequence[int] | None = None,
     ) -> SamplexItem:
         """Creates a TREX calibration circuit.
 
-        The calibration circuit is based on all circuit terminal measurement layers in all pubs.
+        The calibration circuit has ``num_qubits`` qubits and a ``_meas`` register of the same
+        size, in which qubit ``i`` is measured into bit ``i``.
 
         Args:
-            circuits: List of circuits to extract relevant qubits from.
+            num_qubits: The number of qubits of the calibration circuit.
             num_randomizations: The number of TREX calibration randomizations.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+            meas_qubits: The qubits to measure. Bits of the other qubits are not written. If
+                ``None``, all the ``num_qubits`` qubits are measured.
 
         Returns:
             Samplex item containing calibration circuit for TREX factors calculation.
         """
-        # create the combined noise learning layer of all given inputs
-        max_num_qubits = max(circuit.num_qubits for circuit in circuits)
-
-        classical_cal_reg = ClassicalRegister(max_num_qubits, name="_meas")
-        trex_circuit = QuantumCircuit(max_num_qubits)
+        classical_cal_reg = ClassicalRegister(num_qubits, name="_meas")
+        trex_circuit = QuantumCircuit(num_qubits)
         trex_circuit.add_register(classical_cal_reg)
-        trex_circuit.measure_all(add_bits=False)
+        if meas_qubits is None:
+            trex_circuit.measure_all(add_bits=False)
+        else:
+            trex_circuit.barrier()
+            trex_circuit.measure(list(meas_qubits), [classical_cal_reg[q] for q in meas_qubits])
         annotated_trex_circuit = TREX._box_circuit(trex_circuit, custom_boxing_options)
         template_trex_circuit, trex_samplex = build(annotated_trex_circuit)
         trex_calibration_item = SamplexItem(
@@ -312,12 +325,31 @@ class TREX:
             sparse_pauli = observable_term
         else:
             sparse_pauli = QubitSparsePauli(observable_term)
+        num_calibrated_qubits = (
+            noise_data.num_qubits
+            if isinstance(noise_data, PauliLindbladMap)
+            else noise_data.shape[-1]
+        )
+        # A term acting on a qubit that was not calibrated has no noise data. Fail instead of
+        # assuming that this qubit has no noise, which would silently skip its mitigation.
+        if len(sparse_pauli.indices) > 0 and max(sparse_pauli.indices) >= num_calibrated_qubits:
+            raise ValueError(
+                f"The observable term acts on qubit {max(sparse_pauli.indices)}, but the TREX "
+                f"calibration data has only {num_calibrated_qubits} qubits."
+            )
         if isinstance(noise_data, PauliLindbladMap):
             num_qubits = max(noise_data.num_qubits, sparse_pauli.num_qubits)
             z_sparse_pauli = QubitSparsePauli(
                 ("Z" * len(sparse_pauli.indices), sparse_pauli.indices),
                 num_qubits=num_qubits,
             )
+            if noise_data.num_qubits != num_qubits:
+                # The calibration is narrower than the circuit of the observable, but covers all
+                # the qubits the term acts on. Pad it with identity on the remaining qubits, which
+                # the term does not touch, so that the widths match.
+                noise_data = PauliLindbladMap.from_sparse_list(
+                    noise_data.to_sparse_list(), num_qubits=num_qubits
+                )
             trex_factor: float = 1 / noise_data.pauli_fidelity(z_sparse_pauli)
             return trex_factor
         # The input is a result of TREX calibration execution treat every non identity Pauli as Z

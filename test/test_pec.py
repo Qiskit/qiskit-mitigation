@@ -28,6 +28,8 @@ from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
 from samplomatic.utils import get_annotation
 
+from .trim_helpers import LearnedLayersTestsMixin, TrimMeasurementsTestsMixin
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1048,6 +1050,23 @@ class TestPECCreateInstanceFromPassthroughData(unittest.TestCase):
         passthrough = self._minimal_passthrough(trex_calibration=True)
         with self.assertRaises(ValueError):
             PEC.create_instance_from_passthrough_data(passthrough, trex=None)
+
+
+# ---------------------------------------------------------------------------
+# PEC  -  trim_measurements
+# ---------------------------------------------------------------------------
+
+
+class TestPECTrimMeasurements(TrimMeasurementsTestsMixin, unittest.TestCase):
+    """Tests for ``trim_measurements`` in :meth:`PEC.prepare`."""
+
+    task_cls = PEC
+
+
+class TestPECLearnedLayersMatch(LearnedLayersTestsMixin, unittest.TestCase):
+    """Noise learned for a different trimming is not found by :meth:`PEC.prepare`."""
+
+    task_cls = PEC
 
 
 if __name__ == "__main__":

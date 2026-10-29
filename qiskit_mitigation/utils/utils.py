@@ -14,13 +14,18 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
 from qiskit import QuantumCircuit
 from qiskit.circuit import BoxOp, CircuitInstruction
+from qiskit.primitives.containers.observables_array import ObservablesArray
+from qiskit.quantum_info import SparsePauliOp
 from samplomatic.quantum_program import QuantumProgramResult
 from samplomatic.utils import find_unique_box_instructions, undress_box
+
+from qiskit_mitigation.utils.meas_qubits import derive_meas_qubits
 
 if TYPE_CHECKING:
     from qiskit_mitigation.mitigation_task import MitigationTask
@@ -99,6 +104,7 @@ def find_combined_unique_layers(
     mitigation_types: list[MitigationTask] | None = None,
     custom_boxing_options: dict | list[dict] | None = None,
     box_types: Literal["gates", "measurement", "all"] = "all",
+    observables: Sequence[ObservablesArray | Sequence[SparsePauliOp]] | None = None,
 ) -> list[CircuitInstruction]:
     """Return the unique boxed layers found across the given circuits using the given boxing options.
 
@@ -107,6 +113,11 @@ def find_combined_unique_layers(
     Supplying the wanted mitigation methods is recommended to ensure that the unique layers used for learning wiil be equal to those used in execution.
     The returned boxes can be filtered so only boxes containing measurements, only boxes containing solely gates or all types of boxes are returned.
 
+    .. note::
+        The measurement boxes are found without the boxing options that ``prepare`` adds when a
+        :class:`~qiskit_mitigation.TREX` is used, so they do not match the measurement boxes of a
+        task prepared with TREX.
+
     Args:
         circuits: The circuit to find the unique layers for.
         mitigation_types: List of initiated mitigation classes that the circuits will be mitigated with. Each mitigation method might enforce boxing options that will affect the unique layers.
@@ -114,16 +125,43 @@ def find_combined_unique_layers(
         custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function to find the unique layers.
             If a single dict is given, the same custom boxing option will be used for all tasks. If ``None`` is given, the default boxing option will be used.
         box_types: Can be either ``"gates"``, ``"measurements"`` or ``"all"``, corresponding to filter boxes with only gate layers, only measurement layers or all layers, respectively.
+        observables: If given, one entry (an observables array or a sequence of observables) per
+            circuit. The layers are then found for circuits whose measurements are trimmed to the
+            active and observed qubits, exactly as when ``prepare`` is called with
+            ``trim_measurements=True`` and the same observables. If ``None`` (default), all the
+            qubits are measured.
+
+            .. warning::
+                Pass ``observables`` if and only if ``trim_measurements=True`` is passed to
+                ``prepare`` of the tasks, together with the same observables. The measured qubits
+                change the boxing, so layers learned with a different choice are not found by
+                ``prepare``.
 
     Returns:
         Unique boxed layers found across the given circuits using the given boxing options.
+
+    Raises:
+        ValueError: If the length of ``mitigation_types``, ``custom_boxing_options`` or
+            ``observables`` does not match the number of circuits.
+        ValueError: If ``observables`` is given and, for some circuit, no qubit is active or
+            observed.
     """
     from qiskit_mitigation.mitigation_task import MitigationTask
 
+    if box_types == "measurement":
+        warnings.warn(
+            "The measurement boxes are found without the boxing options that `prepare` adds when "
+            "a TREX is used, so they do not match the measurement boxes of tasks prepared with "
+            "TREX.",
+            UserWarning,
+            stacklevel=2,
+        )
     if mitigation_types is None:
         mitigation_types = [MitigationTask()] * len(circuits)
     if len(mitigation_types) != len(circuits):
         raise ValueError("Number of mitigation_types does not match number of circuits.")
+    if observables is not None and len(observables) != len(circuits):
+        raise ValueError("Number of observables does not match number of circuits.")
     if isinstance(custom_boxing_options, list) and len(custom_boxing_options) != len(circuits):
         raise ValueError("Number of custom boxing options does not match number of circuits.")
     boxing_options_list: Sequence[dict | None]
@@ -134,10 +172,21 @@ def find_combined_unique_layers(
     else:
         boxing_options_list = custom_boxing_options
 
+    meas_qubits_list: Sequence[list[int] | None]
+    if observables is None:
+        meas_qubits_list = [None] * len(circuits)
+    else:
+        meas_qubits_list = [
+            derive_meas_qubits(circuit, obs, boxing_options)
+            for circuit, obs, boxing_options in zip(
+                circuits, observables, boxing_options_list, strict=True
+            )
+        ]
+
     boxed_circuits = (
-        task._box_circuit(circuit, boxing_options)
-        for task, circuit, boxing_options in zip(
-            mitigation_types, circuits, boxing_options_list, strict=True
+        task._box_circuit(circuit, boxing_options, meas_qubits)
+        for task, circuit, boxing_options, meas_qubits in zip(
+            mitigation_types, circuits, boxing_options_list, meas_qubits_list, strict=True
         )
     )
     instructions = (box for boxed_circuit in boxed_circuits for box in boxed_circuit)

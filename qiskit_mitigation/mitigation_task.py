@@ -45,6 +45,7 @@ from qiskit_mitigation.utils.expectation_values import (
     _compute_single_term_exp_val_with_twirl_variance,
     executor_expectation_values,
 )
+from qiskit_mitigation.utils.meas_qubits import _expand_meas_data_and_flips, derive_meas_qubits
 from qiskit_mitigation.utils.measurement_bases import (
     _convert_pauli_basis,
     _identify_measure_basis,
@@ -92,7 +93,7 @@ class MitigationTask:
 
     """
 
-    VERSION = "0.1"
+    VERSION = "0.2"
 
     def __init__(self):
         """Instantiate a MitigationTask."""
@@ -106,6 +107,8 @@ class MitigationTask:
         self.param_basis_pairs: list[tuple[tuple[int, ...], str]] | None = None
         self.param_shape = None
         self.meas_bases: list[Pauli] | None = None
+        self.meas_qubits: list[int] | None = None
+        self.circuit_num_qubits: int | None = None
         self.custom_boxing_options: dict = None
         self.shots_per_randomization: int = None
         self.num_randomizations: int = None
@@ -117,6 +120,7 @@ class MitigationTask:
         cls,
         circuit: QuantumCircuit,
         boxing_options: dict | None,
+        meas_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -130,6 +134,10 @@ class MitigationTask:
             circuit: The circuit to group into boxes.
             boxing_options: Dictionary of :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` options.
                 If ``None``, default boxing options are used.
+            meas_qubits: Circuit qubit indices to measure. Only these qubits get a classical bit in
+                the ``_meas`` register. The caller is responsible for the set being sufficient (see
+                :func:`~qiskit_mitigation.utils.meas_qubits.derive_meas_qubits`). If ``None``, all
+                qubits are measured.
 
         Returns:
             The boxed circuit.
@@ -155,14 +163,20 @@ class MitigationTask:
         # Remove any existing final measurements
         prepared_circuit = circuit.remove_final_measurements(inplace=False)
 
+        # Determine which qubits to measure
+        if meas_qubits is None:
+            qubits_to_measure = list(prepared_circuit.qubits)
+        else:
+            qubits_to_measure = [prepared_circuit.qubits[q] for q in meas_qubits]
+
         # Add final measurements
-        creg = ClassicalRegister(prepared_circuit.num_qubits, "_meas")
+        creg = ClassicalRegister(len(qubits_to_measure), "_meas")
         try:
             prepared_circuit.add_register(creg)
         except CircuitError as ex:
             raise ValueError("Name `_meas` is reserved for a dedicated classical register.") from ex
         prepared_circuit.barrier()
-        prepared_circuit.measure(prepared_circuit.qubits, creg)
+        prepared_circuit.measure(qubits_to_measure, creg)
 
         try:
             boxing_pm = generate_boxing_pass_manager(**edited_boxing_options)
@@ -207,11 +221,16 @@ class MitigationTask:
             # that may be present is performed without basis changing gates
             samplex_arguments[spec.name] = np.zeros(spec.shape)
 
-        # Finalize basis changing gates for the final measurements
+        # Finalize basis changing gates for the final measurements.
+        # The ChangeBasis box acts only on the measured qubits, which may be a subset of the
+        # circuit qubits, so slice change_basis to the qubits of the box (ascending circuit order).
         for instr in boxed_circuit.reverse_ops():
             op = instr.operation
             if op.name == "box" and (change_basis_annot := get_annotation(op, ChangeBasis)):
-                samplex_arguments[f"basis_changes.{change_basis_annot.ref}"] = change_basis
+                box_qubits = sorted(boxed_circuit.find_bit(q).index for q in instr.qubits)
+                samplex_arguments[f"basis_changes.{change_basis_annot.ref}"] = change_basis[
+                    :, box_qubits
+                ]
                 break
         else:
             # This should not be reachable
@@ -456,6 +475,7 @@ class MitigationTask:
         broadcast_obs_and_params: bool,
         trex: TREX | None,
         quantum_program: QuantumProgram | None,
+        trim_measurements: bool = False,
     ):
         """Save the basic variables of the circuit and observables as internal variables.
 
@@ -469,6 +489,10 @@ class MitigationTask:
             broadcast_obs_and_params: Whether to broadcast observables and parameters.
             trex: A TREX mitigation instance that will be used to mitigate readout errors.
             quantum_program: The quantum program to add an item for.
+            trim_measurements: Whether to measure only the active and observed qubits.
+
+        Raises:
+            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed.
         """
         # save variables in the class
         self.circuit = circuit
@@ -512,6 +536,12 @@ class MitigationTask:
         self.num_randomizations = num_randomizations
         self.shots_per_randomization = shots_per_randomization
         self.trex = trex
+        # When measurements are not trimmed, all the qubits are measured and both attributes stay ``None``
+        self.meas_qubits = None
+        self.circuit_num_qubits = None
+        if trim_measurements:
+            self.meas_qubits = derive_meas_qubits(circuit, self.observables, custom_boxing_options)
+            self.circuit_num_qubits = circuit.num_qubits
 
     def _extract_item_data(
         self,
@@ -564,21 +594,42 @@ class MitigationTask:
         return False
 
     def find_unique_layers(
-        self, circuit: QuantumCircuit, custom_boxing_options: dict | None = None
+        self,
+        circuit: QuantumCircuit,
+        custom_boxing_options: dict | None = None,
+        observables: ObservablesArray | Sequence[SparsePauliOp] | None = None,
     ) -> list[CircuitInstruction]:
         """Return the unique boxed layers of the given circuit using the given boxing options.
 
         Args:
             circuit: The circuit to found its unique layers.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+            observables: If given, the layers are found for a circuit whose measurements are
+                trimmed to the active and observed qubits, exactly as when ``prepare`` is called
+                with ``trim_measurements=True`` and the same observables. If ``None`` (default),
+                all the qubits are measured.
+
+                .. warning::
+                    Pass ``observables`` if and only if ``trim_measurements=True`` is passed to
+                    ``prepare``, together with the same observables. The measured qubits change
+                    the boxing, so layers learned with a different choice are not found by
+                    ``prepare``.
 
         Returns:
             Unique boxed layers of the given circuit.
+
+        Raises:
+            ValueError: If ``observables`` is given and no qubit is active or observed.
         """
         custom_boxing_options = (
             {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
         )
-        boxed_circuit = self._box_circuit(circuit, custom_boxing_options)
+        meas_qubits = (
+            derive_meas_qubits(circuit, observables, custom_boxing_options)
+            if observables is not None
+            else None
+        )
+        boxed_circuit = self._box_circuit(circuit, custom_boxing_options, meas_qubits)
         instructions = (box for box in boxed_circuit)
         unique_boxes: list[CircuitInstruction] = find_unique_box_instructions(
             instructions=instructions, normalize_annotations=None, undress_boxes=True
@@ -596,6 +647,7 @@ class MitigationTask:
         broadcast_obs_and_params: bool = False,
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
+        trim_measurements: bool = False,
     ) -> QuantumProgram:
         """Creates a :class:`~.QuantumProgram` for executing via Executor.
 
@@ -622,9 +674,25 @@ class MitigationTask:
             trex: A TREX mitigation instance that will be used to mitigate readout errors.
             quantum_program: The quantum program to add an item for. If None, a new program will
                 be created.
+            trim_measurements: Whether to measure only the qubits that have instructions on them or
+                are in the support of the observables, instead of all the qubits of the circuit.
+                The measured qubits are available in ``meas_qubits`` after the call. The results
+                are expanded back to the full circuit width before post-processing.
+
+                .. warning::
+                    Trimming changes the boxing of the circuit. To use noise learned for
+                    :class:`~qiskit_mitigation.PEC` or :class:`~qiskit_mitigation.zne.PEA`, learn
+                    it on the layers found with ``observables`` passed to
+                    :func:`~qiskit_mitigation.find_combined_unique_layers` or
+                    :meth:`~qiskit_mitigation.MitigationTask.find_unique_layers`: pass
+                    ``observables`` to the layer finder if and only if ``trim_measurements=True``
+                    is passed to ``prepare``, and pass the same observables.
 
         Returns:
             A :class:`~.QuantumProgram` that can be executed via Executor.
+
+        Raises:
+            ValueError: If ``trim_measurements`` is ``True`` and no qubit is active or observed.
         """
         # add measurement twirls to the task if TREX is on
         if trex is not None:
@@ -634,7 +702,7 @@ class MitigationTask:
                     "projection operators. You can decompose into pauli operators if the "
                     "exponential cost is acceptable."
                 )
-            custom_boxing_options = trex._edit_boxing_options(self, custom_boxing_options)
+            custom_boxing_options = trex._edit_boxing_options(custom_boxing_options)
         # save variables in the class
         self._save_basic_variables(
             circuit,
@@ -646,9 +714,12 @@ class MitigationTask:
             broadcast_obs_and_params,
             trex,
             quantum_program,
+            trim_measurements,
         )
 
-        boxed_circuit = self._box_circuit(self.circuit, self.custom_boxing_options)
+        boxed_circuit = self._box_circuit(
+            self.circuit, self.custom_boxing_options, self.meas_qubits
+        )
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex
         template, samplex = build(boxed_circuit)
@@ -693,6 +764,8 @@ class MitigationTask:
             "param_shape": self.param_shape,
             "broadcast_obs_and_params": self.broadcast_obs_and_params,
             "meas_bases": meas_bases_str,
+            "meas_qubits": self.meas_qubits,
+            "circuit_num_qubits": self.circuit_num_qubits,
             "program_item_index": self._program_item_index,
             "trex_calibration": self.trex.has_calibration_result()
             if self.trex is not None
@@ -700,6 +773,10 @@ class MitigationTask:
         }
 
         self._add_data_to_passthrough_data(data_for_passthrough, quantum_program)
+        # Register with TREX only once nothing can fail anymore, so that a failed ``prepare``
+        # does not leave this task behind in the TREX calibration.
+        if trex is not None:
+            trex.tasks.append(self)
         return quantum_program
 
     def postprocess(
@@ -742,6 +819,8 @@ class MitigationTask:
             meas_bases=self.meas_bases,
             broadcast_obs_and_params=self.broadcast_obs_and_params,
             measure_noise_data=measure_noise_data,
+            meas_qubits=self.meas_qubits,
+            circuit_num_qubits=self.circuit_num_qubits,
         )
 
     @staticmethod
@@ -890,6 +969,8 @@ class MitigationTask:
         task.param_shape = param_shape
         task.broadcast_obs_and_params = broadcast_obs_and_params
         task.meas_bases = meas_bases
+        task.meas_qubits = passthrough.get("meas_qubits")
+        task.circuit_num_qubits = passthrough.get("circuit_num_qubits")
         task._program_item_index = program_item_index
         task.trex = trex
         return task
@@ -903,6 +984,8 @@ class MitigationTask:
         meas_bases: Sequence[Pauli] | Sequence[str] | PauliList | None = None,
         broadcast_obs_and_params: bool = False,
         measure_noise_data: PauliLindbladMap | np.ndarray | None = None,
+        meas_qubits: list[int] | None = None,
+        circuit_num_qubits: int | None = None,
     ) -> PubResult:
         """Process expectation values for a single item result.
 
@@ -917,6 +1000,13 @@ class MitigationTask:
                 correspond to the ``i`` th slice of the data in ``item_result``.
             broadcast_obs_and_params: Whether to broadcast observables and parameter values.
             measure_noise_data: Measurement noise calibration data for TREX mitigation.
+            meas_qubits: Sorted list of the circuit qubit indices that were measured, if the task was
+                prepared with ``trim_measurements=True`` (available as ``task.meas_qubits``). Must be
+                given together with ``circuit_num_qubits``. If ``None``, all the qubits are assumed to
+                be measured, which gives wrong results for trimmed data.
+            circuit_num_qubits: The total number of qubits in the circuit. Used together with
+                ``meas_qubits`` to expand the data back to the full width. Must be given together
+                with ``meas_qubits``.
 
         Returns:
             A PubResult which contains ``evs`` and ``std`` as fields in its data, where ``evs`` are expectation values,
@@ -929,11 +1019,18 @@ class MitigationTask:
             ValueError: If ``item_result['_meas']`` has invalid number of axes.
             ValueError: If ``param_shape`` and ``observables.shape`` cannot be broadcasted against
                 each other.
+            ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
         """
         try:
             data = item_result["_meas"].copy()
         except KeyError as ex:
             raise ValueError("Dedicated creg ``'_meas'`` is missing from the results.") from ex
+
+        # Expand compressed measurement data back to full-circuit width, so that all downstream
+        # postprocessing can use the observable qubit indices without any remapping.
+        data, meas_flips = _expand_meas_data_and_flips(
+            data, item_result.get("measurement_flips._meas", None), meas_qubits, circuit_num_qubits
+        )
 
         trex_scale_factors = (
             TREX.trex_factors_each_term(measure_noise_data, observables)
@@ -955,8 +1052,8 @@ class MitigationTask:
                 )
 
             # Apply measurement flips if present
-            if "measurement_flips._meas" in item_result:
-                data ^= item_result["measurement_flips._meas"]
+            if meas_flips is not None:
+                data ^= meas_flips
 
             if isinstance(observables, SparsePauliOp):
                 observables = ObservablesArray.coerce(observables)
@@ -986,7 +1083,6 @@ class MitigationTask:
                 f"``item_result['_meas']`` has ``{data.ndim}`` axes, expected ``4`` or ``5``."
             )
 
-        meas_flips = item_result.get("measurement_flips._meas", None)
         if isinstance(observables, ObservablesArray):
             observables = [
                 SparsePauliOp.from_sparse_observable(sparse_obs)
@@ -1007,4 +1103,9 @@ class MitigationTask:
         return PubResult(data=data_bin)
 
 
-VERSION_TO_POSTPROCESSOR = {"0.1": MitigationTask.compute_expectation_value}
+# Both versions share the same postprocessor. Version 0.2 exists because older releases
+# do not support it.
+VERSION_TO_POSTPROCESSOR = {
+    "0.1": MitigationTask.compute_expectation_value,
+    "0.2": MitigationTask.compute_expectation_value,
+}
