@@ -20,7 +20,26 @@ from typing import Any, Literal, cast
 
 import numpy as np
 from qiskit.circuit import Gate, QuantumCircuit
-from qiskit.circuit.library import CXGate, CYGate, CZGate, ECRGate, SwapGate
+from qiskit.circuit.library import (
+    CHGate,
+    CPhaseGate,
+    CRXGate,
+    CRYGate,
+    CRZGate,
+    CSdgGate,
+    CSGate,
+    CSXGate,
+    CXGate,
+    CYGate,
+    CZGate,
+    ECRGate,
+    RXXGate,
+    RYYGate,
+    RZXGate,
+    RZZGate,
+    SwapGate,
+    iSwapGate,
+)
 from qiskit.converters import circuit_to_dag
 from qiskit.dagcircuit import DAGCircuit
 from qiskit.primitives import DataBin, PubResult
@@ -51,7 +70,26 @@ from qiskit_mitigation.zne.extrapolation import (
     _validate_noise_factors,
 )
 
-SUPPORTED_FOLDED_GATES: tuple[type, ...] = (ECRGate, CXGate, CYGate, CZGate, SwapGate)
+SUPPORTED_FOLDED_GATES: tuple[type, ...] = (
+    ECRGate,
+    CXGate,
+    CYGate,
+    CZGate,
+    SwapGate,
+    RZZGate,
+    RXXGate,
+    RYYGate,
+    RZXGate,
+    iSwapGate,
+    CHGate,
+    CRXGate,
+    CRYGate,
+    CRZGate,
+    CSGate,
+    CSdgGate,
+    CSXGate,
+    CPhaseGate,
+)
 """2-qubit gate types supported for folding."""
 
 
