@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import copy
 import sys
-import warnings
 from collections.abc import Sequence
 from typing import Any, Literal
 
@@ -25,7 +24,13 @@ from qiskit import QuantumCircuit
 from qiskit.primitives import DataBin, PubResult
 from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.observables_array import ObservablesArray
-from qiskit.quantum_info import Pauli, PauliLindbladMap, PauliList, SparseObservable, SparsePauliOp
+from qiskit.quantum_info import (
+    Pauli,
+    PauliLindbladMap,
+    PauliList,
+    QubitSparsePauliList,
+    SparsePauliOp,
+)
 from qiskit.transpiler import CouplingMap
 from qiskit.utils import LazyImportTester
 from samplomatic import InjectNoise, build
@@ -49,16 +54,7 @@ from qiskit_mitigation.utils.measurement_bases import (
 )
 
 HAS_SLC = LazyImportTester(
-    {
-        "qiskit_addon_slc.bounds": (
-            "compute_backward_bounds",
-            "compute_forward_bounds",
-            "tighten_with_speed_limit",
-            "compute_local_scales",
-            "merge_bounds",
-        ),
-        "qiskit_addon_slc.utils": ("generate_noise_model_paulis",),
-    },
+    {"qiskit_addon_slc"},
     name="qiskit-addon-slc",
     install="pip install qiskit-addon-slc",
 )
@@ -109,12 +105,9 @@ class PEC(MitigationTask):
         super().__init__()
         self.gamma = None
         # attributes relevant for slc integration
-        self._slc_forward_bounds = None
-        self._slc_backward_bounds = None
-        self._slc_merged_bounds = None
-        self._slc_local_scales = None
-        self._slc_reduced_gamma = None
-        self._slc_reduced_bias = None
+        self._slc_local_scales: dict[str, np.ndarray] | None = None
+        self._slc_reduced_gamma: float | None = None
+        self._slc_bias: float | None = None
 
     @classmethod
     def _box_circuit(
@@ -222,7 +215,7 @@ class PEC(MitigationTask):
                 A value greater than one corresponds to amplifying the learned noise.
                 A value of "slc_local_scales" corresponds to partially removing the learned noise of each box according to the
                 local scales learned using shaded light-cones (slc). In order to compute those local scales, first use
-                ``compute_bounds_using_slc`` and ``compute_local_scales_using_slc`` functions.
+                ``generate_slc_bounds_computation_input`` and the `qiskit-addon-slc` bounds functions, and then use ``set_slc_local_scales`` (see its documentation).
                 If ``"auto"``, the value in the range ``[0, 1]`` will be chosen automatically by the formula ``1 - log(max_overhead) / log(gamma^2)``.
             max_sampling_overhead: If scale_randomizations_by_gamma is True, limit the multiplicative ratio of the number of randomizations.
 
@@ -234,7 +227,7 @@ class PEC(MitigationTask):
         if noise_gain == "slc_local_scales" and self._slc_local_scales is None:
             raise ValueError(
                 "noise_gain is set to 'slc_local_scales' but no slc_local_scales were computed. "
-                "Use ``compute_local_scales_using_slc`` function to compute local scales first."
+                "Use ``set_slc_local_scales`` to set the local scales first."
             )
 
         # add measurement twirls to the task if TREX is on
@@ -314,7 +307,8 @@ class PEC(MitigationTask):
 
         # Adjusting noise_scale to [-1, 0] range from the [0, 1] range of noise_gain
         noise_scale = gain - 1
-        # The sampling scaling is proportional to 1 - noise_gain, as 0 is full PEC and 1 is no PEC
+        # The sampling scaling is proportional to 1 - noise_gain,
+        # as 0 gain is full PEC (noise_factor=1) and 1 gain is no PEC (noise_factor=0)
         noise_factor = 1 - gain
 
         # Create a noise model map containing only the layers relevant for the given circuit
@@ -339,18 +333,20 @@ class PEC(MitigationTask):
             self.custom_boxing_options.get("inject_noise_strategy", None)
             == "individual_modification"
         ):
+            if noise_gain != "slc_local_scales":
+                raise ValueError(
+                    'noise_gain must be set to ``slc_local_scales`` if custom_boxing_options["inject_noise_strategy"] '
+                    "is set to ``individual_modification``."
+                )
             modifiers = [
                 spec.name.split(".")[-1] for spec in samplex.inputs().get_specs("noise_scales")
             ]
+            if missing := set(modifiers) - set(self._slc_local_scales or {}):
+                raise ValueError(f"Missing local scale for boxes {sorted(missing)}.")
             for modifier in modifiers:
                 samplex_arguments[f"noise_scales.{modifier}"] = noise_scale
-            if noise_gain == "slc_local_scales" and self._slc_local_scales is not None:
-                if missing := set(modifiers) - set(self._slc_local_scales):
-                    raise ValueError(f"Missing local scale for boxes {sorted(missing)}.")
-                samplex_arguments["local_scales"] = self._slc_local_scales
-                scaled_gamma = (
-                    self._slc_reduced_gamma if self._slc_reduced_gamma is not None else None
-                )
+            samplex_arguments["local_scales"] = self._slc_local_scales
+            scaled_gamma = self._slc_reduced_gamma if self._slc_reduced_gamma is not None else None
 
         scaled_gamma = (
             scaled_gamma
@@ -413,7 +409,7 @@ class PEC(MitigationTask):
             if self.trex is not None
             else None,
             "pec_gamma": self.gamma,
-            "pec_slc_reduced_bias": self._slc_reduced_bias,
+            "pec_slc_bias": self._slc_bias,
         }
 
         self._add_data_to_passthrough_data(data_for_passthrough, quantum_program)
@@ -462,52 +458,102 @@ class PEC(MitigationTask):
             measure_noise_data=measure_noise_data,
         )
 
+    @property
+    def slc_local_scales(self) -> dict[str, np.ndarray] | None:
+        """The SLC local scales set via :meth:`set_slc_local_scales`.
+
+        A dict mapping each box ref to an array of per-term local scales, indicating which
+        individual Pauli error terms are mitigated.
+        ``None`` if :meth:`set_slc_local_scales` has not been called yet.
+        """
+        return self._slc_local_scales
+
+    @property
+    def slc_reduced_gamma(self) -> float | None:
+        """The SLC reduced gamma set via :meth:`set_slc_local_scales`.
+
+        The square root of the sampling cost overhead (gamma) associated with the stored
+        :attr:`slc_local_scales`.
+        ``None`` if :meth:`set_slc_local_scales` has not been called yet.
+        """
+        return self._slc_reduced_gamma
+
+    @property
+    def slc_bias(self) -> float | None:
+        """The SLC remaining bias set via :meth:`set_slc_local_scales`.
+
+        The remaining bias on expectation values for the stored :attr:`slc_local_scales`.
+        ``None`` if :meth:`set_slc_local_scales` has not been called yet or if no bias was provided.
+        """
+        return self._slc_bias
+
     @HAS_SLC.require_in_call
-    def compute_bounds_using_slc(
+    def generate_slc_bounds_computation_input(
         self,
         circuit: QuantumCircuit,
-        observable: Pauli | PauliList | SparseObservable | SparsePauliOp,
         coupling_map: CouplingMap | None = None,
         custom_boxing_options: dict | None = None,
-    ) -> tuple[dict[str, PauliLindbladMap], dict[str, PauliLindbladMap]]:
-        """Compute the forward and backward evolved unequal-time commutator bounds for all Pauli error terms of each noisy layer in the target circuit, using `qiskit-addon-slc` package.
+    ) -> tuple[QuantumCircuit, dict[str, QubitSparsePauliList]]:
+        """Prepare the inputs required for computing the shaded light-cone (SLC) bounds of a circuit.
 
-        Learned Pauli error rates of each Pauli error term can be used to merge the bounds in order to compute ``local_scales`` using the ``compute_local_scales_using_slc`` function.
+        The circuit is boxed, and the Pauli error terms of each noisy layer are generated using
+        :func:`qiskit_addon_slc.utils.generate_noise_model_paulis`.
+        The circuit, boxed circuit and the boxing options are saved in the class instance.
+        If the instance already holds a boxed circuit of the given ``circuit`` (for example, from a previous call to this function or
+        to ``prepare``), and ``custom_boxing_options`` is ``None`` or equal to the saved boxing options, the saved boxed circuit is reused instead of
+        boxing the circuit again.
+
+        .. important::
+            The bounds are keyed by the ``modifier_ref`` of each noisy box, so
+            ``custom_boxing_options["inject_noise_strategy"]`` must be ``"individual_modification"``
+            (see :func:`qiskit_addon_slc.bounds.compute_forward_bounds`).
+            If it is not specified, it is set to ``"individual_modification"``. If ``custom_boxing_options`` is ``None``
+            and the saved boxing options are used, the same rule applies to them.
 
         .. note::
-            This function uses the optional dependency of `qiskit-addon-slc` package.
+            This function uses the optional dependency of ``qiskit-addon-slc`` package.
 
         Args:
             circuit: The target circuit to compute bounds for.
-            observable: The target observable to be measured. In the current implementation, the observable must contain only a single Pauli term.
-                For a multi Pauli observable, you will need to compute each target Pauli separately.
             coupling_map: The coupling map of the backend on which the instructions have been laid out. Used to generate all the relevant Pauli error terms.
                 If ``None``, a 1d line of qubits is assumed.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+                If ``None`` and ``circuit`` is the same object as the circuit saved in the class instance (e.g. from a previous call to ``prepare``),
+                the ``custom_boxing_options`` saved in the instance are used.
 
         Returns:
-            * A dict of the forward unequal-time commutator bounds.
-            * A dict of the backward unequal-time commutator bounds.
+            * The boxed circuit.
+            * A dict mapping the ref of each noise model to the Pauli error terms to consider.
+              Can be given as the ``noise_model_paulis`` input of the ``qiskit-addon-slc`` bounds functions.
 
         Raises:
-            MissingOptionalLibraryError: if `qiskit-addon-slc` package is not installed.
+            MissingOptionalLibraryError: if ``qiskit-addon-slc`` package is not installed.
             ValueError: If the circuit has unbounded parameters.
+            ValueError: If ``custom_boxing_options["inject_noise_strategy"]`` is specified and is not ``"individual_modification"``.
         """
-        from qiskit_addon_slc.bounds import (
-            compute_backward_bounds,
-            compute_forward_bounds,
-            tighten_with_speed_limit,
-        )
         from qiskit_addon_slc.utils import generate_noise_model_paulis
 
         if circuit.parameters:
             raise ValueError("Can't compute bounds on a circuit with unbounded parameters.")
-        self.circuit = circuit
+
+        if custom_boxing_options is None and circuit is self.circuit:
+            custom_boxing_options = self.custom_boxing_options
         custom_boxing_options = (
             {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
         )
-        boxed_circuit = self._box_circuit(circuit, custom_boxing_options)
-        self.boxed_circuit = boxed_circuit
+        if custom_boxing_options.get("inject_noise_strategy", None) is None:
+            custom_boxing_options["inject_noise_strategy"] = "individual_modification"
+        elif custom_boxing_options["inject_noise_strategy"] != "individual_modification":
+            raise ValueError(
+                'custom_boxing_options["inject_noise_strategy"] must be ``individual_modification`` in order to compute slc bounds.'
+            )
+
+        boxed_circuit = self._get_saved_boxed_circuit(circuit, custom_boxing_options)
+        if boxed_circuit is None:
+            self.circuit = circuit
+            self.custom_boxing_options = custom_boxing_options
+            boxed_circuit = self._box_circuit(circuit, custom_boxing_options)
+            self.boxed_circuit = boxed_circuit
         pec_layers = [
             layer
             for layer in self.find_unique_layers(circuit, custom_boxing_options)
@@ -515,94 +561,69 @@ class PEC(MitigationTask):
         ]
 
         noise_model_paulis = generate_noise_model_paulis(pec_layers, coupling_map, circuit)
+        return boxed_circuit, noise_model_paulis
 
-        forward_bounds = compute_forward_bounds(boxed_circuit, noise_model_paulis, observable)
-        backward_bounds = compute_backward_bounds(boxed_circuit, noise_model_paulis)
-
-        forward_bounds_tighter = tighten_with_speed_limit(
-            forward_bounds, boxed_circuit, noise_model_paulis, observable
-        )
-        self._slc_forward_bounds = forward_bounds_tighter
-        self._slc_backward_bounds = backward_bounds
-        return forward_bounds_tighter, backward_bounds
-
-    @HAS_SLC.require_in_call
-    def compute_local_scales_using_slc(
+    def set_slc_local_scales(
         self,
-        noise_maps: dict[str, PauliLindbladMap],
-        sampling_cost_budget: float = np.inf,
-        bias_tolerance: float = 0.0,
-    ) -> tuple[dict[str, np.ndarray], float, float]:
-        """Merge the pre-computed forward and backward bounds and compute local scales which are used to specify which individual error terms to mitigate.
+        local_scales: dict[str, np.ndarray],
+        reduced_gamma: float,
+        reduced_bias: float | None = None,
+    ) -> None:
+        """Set the shaded light-cone (SLC) local scales and reduced gamma on the instance.
 
-        Either the sampling_cost_budget or bias_tolerance must be specified. The former puts an upper bound on the sampling cost while the latter puts an upper bound on the remaining bias to tolerate.
+        These values determine which individual Pauli error terms are mitigated and at what cost
+        when ``noise_gain="slc_local_scales"`` is passed to :meth:`prepare`.
 
-        .. note::
-            This function uses the optional dependency of `qiskit-addon-slc` package.
+        To compute ``local_scales``, ``reduced_gamma``, and ``reduced_bias`` using the
+        ``qiskit-addon-slc`` package:
+
+        1. Call :meth:`generate_slc_bounds_computation_input` with the target circuit to obtain
+           the boxed circuit and ``noise_model_paulis``.
+        2. Compute the bounds to pass to :func:`qiskit_addon_slc.bounds.compute_local_scales`.
+           At least one direction is required. Examples:
+
+           - **Forward only** (optionally tightened)::
+
+               bounds = compute_forward_bounds(boxed_circuit, noise_model_paulis, observable)
+               bounds = tighten_with_speed_limit(bounds, boxed_circuit, noise_model_paulis, observable)  # optional
+
+           - **Backward only**::
+
+               bounds = compute_backward_bounds(boxed_circuit, noise_model_paulis)
+
+           - **Both directions merged** (use :func:`qiskit_addon_slc.bounds.merge_bounds`)::
+
+               bounds = merge_bounds(
+                   boxed_circuit,
+                   tighten_with_speed_limit(
+                       compute_forward_bounds(boxed_circuit, noise_model_paulis, observable),
+                       boxed_circuit, noise_model_paulis, observable,
+                   ),
+                   compute_backward_bounds(boxed_circuit, noise_model_paulis),
+                   noise_maps,
+               )
+
+        3. Call :func:`qiskit_addon_slc.bounds.compute_local_scales` with either a
+           ``sampling_cost_budget`` (upper bound on gamma^2) or a ``bias_tolerance`` (upper bound
+           on the remaining bias) to obtain ``local_scales``, ``sampling_cost``, and
+           ``reduced_bias``. Pass ``sqrt(sampling_cost)`` as ``reduced_gamma``::
+
+               local_scales, sampling_cost, reduced_bias = compute_local_scales(
+                   boxed_circuit, bounds, noise_maps, sampling_cost_budget=<budget>
+               )
+               pec.set_slc_local_scales(local_scales, float(np.sqrt(sampling_cost)), reduced_bias)
 
         Args:
-            noise_maps: Mapping between layer ref to a noise model.
-                The dict must contain all the mitigated layers. Assumes that the unique layers used for noise learning
-                were extracted using the ``find_unique_layers`` method with the same custom boxing options.
-            sampling_cost_budget: The maximum sampling cost (gamma^2) to allow.
-            bias_tolerance: The maximum bias to tolerate.
-
-        Returns:
-            * local_scales - Dict indicating the local scales used to specify which individual error terms to mitigate.
-            * sampling_cost - The sampling cost overhead (gamma^2) required to perform the sampling of local_scales.
-            * reduced_bias - The remaining bias on expectation values computed with these bounds.
-
-        Raises:
-            MissingOptionalLibraryError: if `qiskit-addon-slc` package is not installed.
-            ValueError: If bounds parameters or circuit are missing.
+            local_scales: Dict mapping each box ref to an array of per-term local scales,
+                indicating which individual error terms to mitigate.
+            reduced_gamma: The square root of the sampling cost overhead (gamma) associated with
+                the given ``local_scales``.
+            reduced_bias: The remaining bias on expectation values for the given ``local_scales``.
+                If ``None``, no bias value is stored.
         """
-        from qiskit_addon_slc.bounds import compute_local_scales, merge_bounds
-
-        if self._slc_forward_bounds is None or self._slc_backward_bounds is None:
-            raise ValueError(
-                "Missing bounds parameters. Computation of bounds is needed to compute local scales. "
-                "``compute_bounds_using_slc`` function can be used to compute bounds."
-            )
-        if self.circuit is None and self.boxed_circuit is None:
-            raise ValueError("Missing circuit parameter in the class instance attributes.")
-        boxed_circuit = (
-            self.boxed_circuit
-            if self.boxed_circuit is not None
-            else self._box_circuit(self.circuit, self.custom_boxing_options)
-        )
-        merged_bounds = merge_bounds(
-            boxed_circuit,
-            self._slc_forward_bounds,
-            self._slc_backward_bounds,
-            noise_maps,
-        )
-        self._slc_merged_bounds = merged_bounds
-
-        max_bias_local_scales, _, max_bais = compute_local_scales(
-            boxed_circuit,
-            merged_bounds,  # type: ignore[arg-type]
-            noise_maps,
-            sampling_cost_budget=1,
-        )
-        if bias_tolerance > max_bais:
-            warnings.warn(
-                f"Bias tolerance exceeds unmitigated bias ({max_bais}). Using the unmitigated bias as the tolerance.",
-                stacklevel=2,
-            )
-            return max_bias_local_scales, 1.0, max_bais
-
-        local_scales, sampling_cost, reduced_bias = compute_local_scales(
-            boxed_circuit,
-            merged_bounds,  # type: ignore[arg-type]
-            noise_maps,
-            sampling_cost_budget=sampling_cost_budget,
-            bias_tolerance=bias_tolerance,
-        )
-
         self._slc_local_scales = local_scales
-        self._slc_reduced_gamma = float(np.sqrt(sampling_cost))
-        self._slc_reduced_bias = reduced_bias
-        return local_scales, sampling_cost, reduced_bias
+        self._slc_reduced_gamma = reduced_gamma
+        self._slc_bias = reduced_bias
 
     @staticmethod
     def calculate_gamma(
@@ -795,7 +816,7 @@ class PEC(MitigationTask):
         if (gamma := passthrough.get("pec_gamma")) is None:
             raise ValueError("Missing 'pec_gamma' in passthrough data.")
 
-        slc_reduced_bias = passthrough.get("pec_slc_reduced_bias")
+        slc_reduced_bias = passthrough.get("pec_slc_bias")
 
         pec = PEC()
         pec.VERSION = version
@@ -807,7 +828,7 @@ class PEC(MitigationTask):
         pec._program_item_index = program_item_index
         pec.gamma = gamma
         pec.trex = trex
-        pec._slc_reduced_bias = slc_reduced_bias
+        pec._slc_bias = slc_reduced_bias
 
         return pec
 

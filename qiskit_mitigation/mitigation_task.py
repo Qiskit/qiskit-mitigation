@@ -563,10 +563,33 @@ class MitigationTask:
                     return True
         return False
 
+    def _get_saved_boxed_circuit(
+        self, circuit: QuantumCircuit, custom_boxing_options: dict | None
+    ) -> QuantumCircuit | None:
+        """Return the boxed circuit saved in the instance if it can be used instead of boxing ``circuit`` again.
+
+        The saved boxed circuit can be used if it exists, it was created from the given ``circuit`` object
+        and ``custom_boxing_options`` is either ``None`` or equal to the saved boxing options.
+        Otherwise, ``None`` is returned.
+        """
+        if (
+            self.boxed_circuit is not None
+            and self.circuit is circuit
+            and (
+                custom_boxing_options is None or custom_boxing_options == self.custom_boxing_options
+            )
+        ):
+            return self.boxed_circuit
+        return None
+
     def find_unique_layers(
         self, circuit: QuantumCircuit, custom_boxing_options: dict | None = None
     ) -> list[CircuitInstruction]:
         """Return the unique boxed layers of the given circuit using the given boxing options.
+
+        If the instance already holds a boxed circuit of the given ``circuit`` (for example, after calling ``prepare``),
+        and ``custom_boxing_options`` is ``None`` or equal to the saved boxing options, the saved boxed circuit is used
+        instead of boxing the circuit again.
 
         Args:
             circuit: The circuit to found its unique layers.
@@ -575,10 +598,12 @@ class MitigationTask:
         Returns:
             Unique boxed layers of the given circuit.
         """
-        custom_boxing_options = (
-            {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
-        )
-        boxed_circuit = self._box_circuit(circuit, custom_boxing_options)
+        boxed_circuit = self._get_saved_boxed_circuit(circuit, custom_boxing_options)
+        if boxed_circuit is None:
+            custom_boxing_options = (
+                {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
+            )
+            boxed_circuit = self._box_circuit(circuit, custom_boxing_options)
         instructions = (box for box in boxed_circuit)
         unique_boxes: list[CircuitInstruction] = find_unique_box_instructions(
             instructions=instructions, normalize_annotations=None, undress_boxes=True

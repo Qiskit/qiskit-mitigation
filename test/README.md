@@ -72,7 +72,7 @@ The `py##` environments deliberately install none of the optional dependencies. 
 The `optional` and `py##-optional` environments are the exact complement: they install the `all` extra and select every test that those guards skip (`pytest -m skipif`), so they get exercised with the dependencies present.
 
 ```sh
-$ tox -e py310-optional
+$ tox -e py311-optional
 ```
 
 Since the selection is by the `skipif` marker, guarding a new test is all it takes to have it selected; there is no list of tests or files to maintain.  For the same reason, a `skipif` that is unrelated to an optional dependency gets selected too, which is harmless: such a test merely runs a second time.
