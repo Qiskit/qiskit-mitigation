@@ -624,7 +624,7 @@ class PEC(MitigationTask):
         Raises:
             ValueError: If ``item_result`` has no ``'_meas'`` key.
             ValueError: If ``item_result['_meas']`` has invalid number of axes.
-            ValueError: If ``item_result`` has no ``'pauli_signs'`` key.
+            ValueError: If ``item_result`` has no ``'pauli_signs'`` key and ``gamma`` is not ``1``.
             ValueError: If ``param_shape`` and ``observables.shape`` cannot be broadcasted against
                 each other.
         """
@@ -636,7 +636,13 @@ class PEC(MitigationTask):
         # extract pec_old signs if present
         pec_signs = item_result.get("pauli_signs", None)
         if pec_signs is None:
-            raise ValueError("Results must contain ``'pauli_signs'`` in the data if PEC is used.")
+            if gamma != 1:
+                raise ValueError(
+                    "Results must contain ``'pauli_signs'`` in the data if PEC is used."
+                )
+            # A circuit without noisy layers (e.g. no entanglers) has no injected noise, so the
+            # samplex emits no signs. An empty noise-terms axis gives every randomization sign +1.
+            pec_signs = np.zeros((*data.shape[:-2], 0), dtype=bool)
 
         trex_scale_factors = (
             TREX.trex_factors_each_term(measure_noise_data, observables)

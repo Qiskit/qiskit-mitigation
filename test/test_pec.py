@@ -286,10 +286,35 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
             PEC.compute_expectation_value_pec(result, self._obs("ZZ"), gamma=1.0)
 
     def test_raises_missing_pauli_signs(self):
-        """Result dict without ``'pauli_signs'`` must raise ``ValueError``."""
+        """Result dict without ``'pauli_signs'`` must raise ``ValueError`` when gamma is not 1."""
         result = {"_meas": np.zeros((2, 1, 4, 2))}
-        with self.assertRaises(ValueError):
-            PEC.compute_expectation_value_pec(result, self._obs("ZZ"), gamma=1.0)
+        with self.assertRaisesRegex(ValueError, "pauli_signs"):
+            PEC.compute_expectation_value_pec(result, self._obs("ZZ"), gamma=2.0)
+
+    def test_missing_pauli_signs_with_gamma_one_broadcast(self):
+        """Without noisy layers there are no signs and gamma is 1, so broadcast mode still runs."""
+        result = {"_meas": np.zeros((2, 1, 4, 2), dtype=bool)}
+        pub_result = PEC.compute_expectation_value_pec(
+            result,
+            self._obs("ZZ"),
+            gamma=1.0,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "ZZ")],
+            broadcast_obs_and_params=True,
+        )
+        np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
+
+    def test_missing_pauli_signs_with_gamma_one_non_broadcast(self):
+        """Without noisy layers there are no signs and gamma is 1, so non-broadcast mode still runs."""
+        result = {"_meas": np.zeros((2, 1, 4, 2), dtype=bool)}
+        pub_result = PEC.compute_expectation_value_pec(
+            result,
+            observables=self._obs("ZZ"),
+            gamma=1.0,
+            broadcast_obs_and_params=False,
+            meas_bases=[Pauli("ZZ")],
+        )
+        np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
 
     def test_raises_broadcast_true_without_param_basis_pairs(self):
         """``broadcast_obs_and_params=True`` with ``param_basis_pairs=None`` must raise."""
@@ -765,6 +790,23 @@ class TestPECPrepare(unittest.TestCase):
         pec.prepare(qc, obs, parameters=None, noise_maps=noise_map)
         self.assertIsNotNone(pec.gamma)
         self.assertIsInstance(pec.gamma, float)
+
+    def test_circuit_without_entanglers_can_be_postprocessed(self):
+        """A circuit with no noisy layers gets gamma 1 and no ``'pauli_signs'``, and still postprocesses."""
+        pec = PEC()
+        qc = QuantumCircuit(3)
+        qc.rz(0.3, 0)
+        qc.rz(1.1, 1)
+        qc.rz(2.0, 2)
+        program = pec.prepare(
+            qc, [SparsePauliOp("ZZZ")], parameters=None, num_randomizations=2, noise_maps={}
+        )
+        self.assertEqual(pec.gamma, 1.0)
+        self.assertEqual(program.items[0].samplex.inputs().get_specs("pauli_lindblad_maps"), [])
+        num_randomizations, num_bases = program.items[0].shape
+        data = np.zeros((num_randomizations, num_bases, 4, 3), dtype=bool)
+        pub_result = pec.postprocess({"_meas": data})
+        np.testing.assert_allclose(pub_result.data.evs, [1.0], atol=1e-10)
 
     def test_appends_to_existing_program(self):
         """Passing an existing ``quantum_program`` must append to it and return the same object."""
