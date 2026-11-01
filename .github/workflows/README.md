@@ -20,6 +20,12 @@ This workflow first installs the minimum supported tox version (the `minversion`
 
 Under the hood, this workflow uses a regular expression to change each `>=` and `~=` specifier in the dependencies to instead be `==`, as pip [does not support](https://github.com/pypa/pip/issues/8085) resolving the minimum versions of packages directly.  Unfortunately, this means that the workflow will only install the minimum version of a package if it is _explicitly_ listed in one of the requirements files with a minimum version.  For instance, if the only listed dependency is `qiskit>=1.0`, this workflow will install `qiskit==1.0` along with the latest version of each transitive dependency, such as `rustworkx`.
 
+## qiskit-ibm-runtime tests (`test_qiskit_ibm_runtime.yml`)
+
+This workflow install tox and runs the unit tests of specified references of [qiskit-ibm-runtime](https://github.com/Qiskit/qiskit-ibm-runtime) against the current state of this repository.
+
+The `qiskit-ibm-runtime-ref` entry of the matrix lists the versions that are tested, and accepts any tag or branch of that repository; each one is passed to tox through the `QISKIT_IBM_RUNTIME_REF` environment variable. This workflow runs for all code changes, as well as on a timer once per day.
+
 ## Code coverage (`coverage.yml`)
 
 This workflow tests the coverage environment on a single version of Python by installing tox and running `tox -e coverage`.
