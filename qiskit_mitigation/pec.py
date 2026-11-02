@@ -215,7 +215,7 @@ class PEC(MitigationTask):
                 A value greater than one corresponds to amplifying the learned noise.
                 A value of "slc_local_scales" corresponds to partially removing the learned noise of each box according to the
                 local scales learned using shaded light-cones (slc). In order to compute those local scales, first use
-                ``generate_slc_bounds_computation_input`` and the `qiskit-addon-slc` bounds functions, and then use ``set_slc_local_scales`` (see its documentation).
+                :meth:`generate_slc_bounds_computation_input` and the ``qiskit-addon-slc`` bounds functions, and then use :meth:`set_slc_local_scales` (see its documentation).
                 If ``"auto"``, the value in the range ``[0, 1]`` will be chosen automatically by the formula ``1 - log(max_overhead) / log(gamma^2)``.
             max_sampling_overhead: If scale_randomizations_by_gamma is True, limit the multiplicative ratio of the number of randomizations.
 
@@ -224,11 +224,7 @@ class PEC(MitigationTask):
         """
         if noise_maps is None:
             raise ValueError("noise_maps is missing")
-        if noise_gain == "slc_local_scales" and self._slc_local_scales is None:
-            raise ValueError(
-                "noise_gain is set to 'slc_local_scales' but no slc_local_scales were computed. "
-                "Use ``set_slc_local_scales`` to set the local scales first."
-            )
+        custom_boxing_options = self._validate_slc_settings(noise_gain, custom_boxing_options)
 
         # add measurement twirls to the task if TREX is on
         if trex is not None:
@@ -251,17 +247,6 @@ class PEC(MitigationTask):
             trex,
             quantum_program,
         )
-
-        if noise_gain == "slc_local_scales":
-            if self.custom_boxing_options.get("inject_noise_strategy", None) is None:
-                self.custom_boxing_options["inject_noise_strategy"] = "individual_modification"
-            elif (
-                self.custom_boxing_options.get("inject_noise_strategy", None)
-                != "individual_modification"
-            ):
-                raise ValueError(
-                    'custom_boxing_options["inject_noise_strategy"] must be ``individual_modification`` if ``noise_gain`` is set to "slc_local_scales".'
-                )
 
         boxed_circuit = self._box_circuit(self.circuit, self.custom_boxing_options)
         self.boxed_circuit = boxed_circuit
@@ -328,16 +313,7 @@ class PEC(MitigationTask):
                 samplex_arguments[f"noise_scales.{ref}"] = noise_scale
         samplex_arguments["pauli_lindblad_maps"] = circuit_noise_model
 
-        scaled_gamma = None
-        if (
-            self.custom_boxing_options.get("inject_noise_strategy", None)
-            == "individual_modification"
-        ):
-            if noise_gain != "slc_local_scales":
-                raise ValueError(
-                    'noise_gain must be set to ``slc_local_scales`` if custom_boxing_options["inject_noise_strategy"] '
-                    "is set to ``individual_modification``."
-                )
+        if noise_gain == "slc_local_scales":
             modifiers = [
                 spec.name.split(".")[-1] for spec in samplex.inputs().get_specs("noise_scales")
             ]
@@ -346,17 +322,15 @@ class PEC(MitigationTask):
             for modifier in modifiers:
                 samplex_arguments[f"noise_scales.{modifier}"] = noise_scale
             samplex_arguments["local_scales"] = self._slc_local_scales
-            scaled_gamma = self._slc_reduced_gamma if self._slc_reduced_gamma is not None else None
 
-        scaled_gamma = (
-            scaled_gamma
-            if scaled_gamma is not None
+        self.gamma = (
+            self._slc_reduced_gamma
+            if noise_gain == "slc_local_scales"
             else self.calculate_gamma(boxed_circuit, circuit_noise_model, noise_factor)
         )
-        self.gamma = scaled_gamma
         # Scale the baseline randomization count by gamma**2 for this pub independently.
         if scale_randomizations_by_gamma:
-            sampling_overhead = scaled_gamma**2
+            sampling_overhead = self.gamma**2
             num_randomizations = int(
                 np.ceil(
                     min(
@@ -457,6 +431,43 @@ class PEC(MitigationTask):
             broadcast_obs_and_params=self.broadcast_obs_and_params,
             measure_noise_data=measure_noise_data,
         )
+
+    def _validate_slc_settings(
+        self,
+        noise_gain: float | Literal["auto", "slc_local_scales"],
+        custom_boxing_options: dict | None,
+    ) -> dict | None:
+        """Validates SLC settings for a pec mitigation task.
+
+        Args:
+            noise_gain: The fraction of noise to keep after the mitigation. A value of ``slc_local_scales`` determines that SLC is used.
+            custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+
+        Returns:
+            Edited boxing options dictionary with the required SLC settings.
+        """
+        strategy = (custom_boxing_options or {}).get("inject_noise_strategy", None)
+        if strategy == "individual_modification" and noise_gain != "slc_local_scales":
+            raise ValueError(
+                'noise_gain must be set to ``slc_local_scales`` if custom_boxing_options["inject_noise_strategy"] is set to ``individual_modification``.'
+            )
+        if noise_gain != "slc_local_scales":
+            return custom_boxing_options
+        if self._slc_local_scales is None or self._slc_reduced_gamma is None:
+            raise ValueError(
+                "noise_gain is set to 'slc_local_scales' but no slc_local_scales were computed or slc_reduced_gamma is None. "
+                "Use ``set_slc_local_scales`` to set the local scales and reduced gamma first."
+            )
+        edited_custom_boxing_options = (
+            {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
+        )
+        if strategy is None:
+            edited_custom_boxing_options["inject_noise_strategy"] = "individual_modification"
+        elif strategy != "individual_modification":
+            raise ValueError(
+                'custom_boxing_options["inject_noise_strategy"] must be ``individual_modification`` if ``noise_gain`` is set to "slc_local_scales".'
+            )
+        return edited_custom_boxing_options
 
     @property
     def slc_local_scales(self) -> dict[str, np.ndarray] | None:
@@ -574,8 +585,9 @@ class PEC(MitigationTask):
         These values determine which individual Pauli error terms are mitigated and at what cost
         when ``noise_gain="slc_local_scales"`` is passed to :meth:`prepare`.
 
-        To compute ``local_scales``, ``reduced_gamma``, and ``reduced_bias`` using the
-        ``qiskit-addon-slc`` package:
+        The parameters ``local_scales``, ``reduced_gamma``, and ``reduced_bias`` can be computed using the
+        ``qiskit-addon-slc`` package. See the `package guide <https://quantum.cloud.ibm.com/docs/addons/qiskit-addon-slc/guides/quickstart>`_ for more information.
+        A summary of the computation flow is shown below.
 
         1. Call :meth:`generate_slc_bounds_computation_input` with the target circuit to obtain
            the boxed circuit and ``noise_model_paulis``.
