@@ -598,6 +598,7 @@ class MitigationTask:
         circuit: QuantumCircuit,
         custom_boxing_options: dict | None = None,
         observables: ObservablesArray | Sequence[SparsePauliOp] | None = None,
+        trex: bool | None = None,
     ) -> list[CircuitInstruction]:
         """Return the unique boxed layers of the given circuit using the given boxing options.
 
@@ -614,6 +615,11 @@ class MitigationTask:
                     ``prepare``, together with the same observables. The measured qubits change
                     the boxing, so layers learned with a different choice are not found by
                     ``prepare``.
+            trex: Whether to add the boxing options that ``prepare`` enforces when a
+                :class:`~qiskit_mitigation.TREX` is used (measurement boxes annotated for all
+                qubits). If ``True``, these options are always added. If ``False``, they are never
+                added. If ``None`` (default), they are added if and only if this task has a TREX
+                mitigation.
 
         Returns:
             Unique boxed layers of the given circuit.
@@ -624,6 +630,8 @@ class MitigationTask:
         custom_boxing_options = (
             {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
         )
+        if trex or (trex is None and self.trex is not None):
+            custom_boxing_options = TREX._edit_boxing_options(custom_boxing_options)
         meas_qubits = (
             derive_meas_qubits(circuit, observables, custom_boxing_options)
             if observables is not None

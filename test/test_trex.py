@@ -23,7 +23,8 @@ from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, QubitSparsePauli, SparsePauliOp
 from qiskit_mitigation import MitigationTask
 from qiskit_mitigation.trex import TREX
-from samplomatic.quantum_program import QuantumProgramResult, SamplexItem
+from samplomatic import build
+from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult, SamplexItem
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,6 +40,15 @@ def _measured_qubits(circuit: QuantumCircuit) -> list[int]:
             if instr.operation.name.startswith("measure")
         }
     )
+
+
+def _calibration_item(
+    num_qubits: int, num_randomizations: int, meas_qubits: list[int] | None = None
+) -> SamplexItem:
+    """Build the calibration item of a boxed calibration circuit, as ``TREX.prepare`` does."""
+    boxed_circuit = TREX()._prepare_calibration_circuit(num_qubits, meas_qubits=meas_qubits)
+    template, samplex = build(boxed_circuit)
+    return SamplexItem(circuit=template, samplex=samplex, shape=(num_randomizations,))
 
 
 def _simple_circuit(num_qubits: int = 2) -> QuantumCircuit:
@@ -176,7 +186,7 @@ class TestHasCalibrationResult(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TREX._prepare_calibration_circuit  (static method)
+# TREX._prepare_calibration_circuit  (instance method)
 # ---------------------------------------------------------------------------
 
 
@@ -185,47 +195,47 @@ class TestPrepareCalibrationCircuit(unittest.TestCase):
 
     def test_returns_samplex_item(self):
         """Must return a ``SamplexItem``."""
-        result = TREX._prepare_calibration_circuit(2, num_randomizations=10)
+        result = _calibration_item(2, num_randomizations=10)
         self.assertIsInstance(result, SamplexItem)
 
     def test_samplex_item_has_correct_shape(self):
         """The ``SamplexItem`` shape must equal ``(num_randomizations,)``."""
         num_randomizations = 7
-        item = TREX._prepare_calibration_circuit(2, num_randomizations=num_randomizations)
+        item = _calibration_item(2, num_randomizations=num_randomizations)
         self.assertEqual(item.shape, (num_randomizations,))
 
     def test_calibration_circuit_is_quantum_circuit(self):
         """The ``SamplexItem.circuit`` must be a ``QuantumCircuit``."""
-        item = TREX._prepare_calibration_circuit(2, num_randomizations=5)
+        item = _calibration_item(2, num_randomizations=5)
         self.assertIsInstance(item.circuit, QuantumCircuit)
 
     def test_calibration_circuit_has_meas_register(self):
         """The calibration circuit must include a classical register named ``'_meas'``."""
-        item = TREX._prepare_calibration_circuit(2, num_randomizations=5)
+        item = _calibration_item(2, num_randomizations=5)
         reg_names = [r.name for r in item.circuit.cregs]
         self.assertIn("_meas", reg_names)
 
     def test_num_qubits_is_the_given_number(self):
         """The calibration circuit and its ``_meas`` register span exactly the given qubits."""
-        item = TREX._prepare_calibration_circuit(4, num_randomizations=5)
+        item = _calibration_item(4, num_randomizations=5)
         self.assertEqual(item.circuit.num_qubits, 4)
         (meas_reg,) = [r for r in item.circuit.cregs if r.name == "_meas"]
         self.assertEqual(meas_reg.size, 4)
 
     def test_single_qubit_circuit(self):
         """A single qubit must produce a valid 1-qubit calibration circuit."""
-        item = TREX._prepare_calibration_circuit(1, num_randomizations=3)
+        item = _calibration_item(1, num_randomizations=3)
         self.assertIsInstance(item, SamplexItem)
         self.assertEqual(item.circuit.num_qubits, 1)
 
     def test_all_qubits_are_measured_without_meas_qubits(self):
         """Without ``meas_qubits`` every qubit of the calibration circuit is measured."""
-        item = TREX._prepare_calibration_circuit(4, num_randomizations=5)
+        item = _calibration_item(4, num_randomizations=5)
         self.assertEqual(_measured_qubits(item.circuit), [0, 1, 2, 3])
 
     def test_only_meas_qubits_are_measured(self):
         """Only the given qubits are measured, each into the bit of its own index."""
-        item = TREX._prepare_calibration_circuit(6, num_randomizations=5, meas_qubits=[0, 3, 5])
+        item = _calibration_item(6, num_randomizations=5, meas_qubits=[0, 3, 5])
         self.assertEqual(item.circuit.num_qubits, 6)
         self.assertEqual(item.circuit.cregs[0].size, 6)
         self.assertEqual(_measured_qubits(item.circuit), [0, 3, 5])
@@ -240,7 +250,7 @@ class TestPrepareCalibrationCircuit(unittest.TestCase):
 
     def test_unmeasured_columns_of_the_sampled_flips_are_zero(self):
         """Measurement flips are only drawn for the measured calibration columns."""
-        item = TREX._prepare_calibration_circuit(6, num_randomizations=200, meas_qubits=[0, 3, 5])
+        item = _calibration_item(6, num_randomizations=200, meas_qubits=[0, 3, 5])
         flips = np.asarray(
             item.samplex.sample({}, num_randomizations=200)["measurement_flips._meas"]
         )
@@ -394,7 +404,7 @@ class TestComputeNoiseModel(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TREX.calculate_trex_factor  (static method)
+# TREX.calculate_trex_factor  (instance method)
 # ---------------------------------------------------------------------------
 
 
@@ -532,7 +542,7 @@ class TestCalculateTrexFactor(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TREX.trex_factors_each_term  (static method)
+# TREX.trex_factors_each_term  (instance method)
 # ---------------------------------------------------------------------------
 
 
@@ -618,7 +628,7 @@ class TestTrexFactorsEachTerm(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TREX._add_data_to_passthrough_data  (static method)
+# TREX._add_data_to_passthrough_data  (instance method)
 # ---------------------------------------------------------------------------
 
 
@@ -786,6 +796,83 @@ class TestTREXBoxCircuit(unittest.TestCase):
         self.assertEqual(options["measure_annotations"], "twirl")
         # No extra keys must have been added.
         self.assertEqual(set(options.keys()), {"enable_measures", "measure_annotations"})
+
+    # --- noise injection ---
+
+    def _forwarded_inject_noise_targets(self, options, **kwargs):
+        """Return the ``inject_noise_targets`` that ``_box_circuit`` forwards to the boxing pass."""
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.trex._box_circuit(self.circuit, options, **kwargs)
+        return mock_gen.call_args.kwargs["inject_noise_targets"]
+
+    def test_disable_measure_noise_injection_replaces_measure_targets_with_none(self):
+        """With ``disable_measure_noise_injection``, ``'all'`` and ``'measures'`` are forwarded as
+        ``'none'`` and the original dict is untouched."""
+        for targets in ("all", "measures"):
+            with self.subTest(inject_noise_targets=targets):
+                options = {"inject_noise_targets": targets}
+                forwarded = self._forwarded_inject_noise_targets(
+                    options, disable_measure_noise_injection=True
+                )
+                self.assertEqual(forwarded, "none")
+                self.assertEqual(options, {"inject_noise_targets": targets})
+
+    def test_disable_measure_noise_injection_keeps_other_targets(self):
+        """``'gates'`` and ``'none'`` do not affect the measurements and are forwarded as is."""
+        for targets in ("gates", "none"):
+            with self.subTest(inject_noise_targets=targets):
+                forwarded = self._forwarded_inject_noise_targets(
+                    {"inject_noise_targets": targets}, disable_measure_noise_injection=True
+                )
+                self.assertEqual(forwarded, targets)
+
+    def test_inject_noise_targets_is_forwarded_by_default(self):
+        """Without ``disable_measure_noise_injection`` all the targets are forwarded as is."""
+        for targets in ("all", "measures", "gates", "none"):
+            with self.subTest(inject_noise_targets=targets):
+                forwarded = self._forwarded_inject_noise_targets({"inject_noise_targets": targets})
+                self.assertEqual(forwarded, targets)
+
+    def test_prepare_with_inject_noise_targets_all_builds_the_calibration_item(self):
+        """``prepare`` must not require noise maps when ``inject_noise_targets`` is ``'all'``."""
+        task = MitigationTask()
+        task.circuit = _simple_circuit()
+        task.meas_qubits = None
+        self.trex.tasks.append(task)
+        quantum_program = self.trex.prepare(
+            1, QuantumProgram(shots=1), custom_boxing_options={"inject_noise_targets": "all"}
+        )
+        self.assertEqual(len(quantum_program.items), 1)
+        for instruction in self.trex.boxed_circuit:
+            self.assertFalse(
+                any(type(a).__name__ == "InjectNoise" for a in instruction.operation.annotations)
+            )
+
+    def test_prepare_calibration_circuit_keeps_noise_injection_by_default(self):
+        """Called directly, ``_prepare_calibration_circuit`` keeps the user's noise injection so
+        the layers match the boxes the user asked for, and does not build a samplex."""
+        options = {"inject_noise_targets": "all"}
+        boxed = TREX()._prepare_calibration_circuit(2, options)
+        self.assertIsInstance(boxed, QuantumCircuit)
+        self.assertTrue(
+            any(
+                type(a).__name__ == "InjectNoise"
+                for instruction in boxed
+                for a in instruction.operation.annotations
+            )
+        )
+        disabled = TREX()._prepare_calibration_circuit(
+            2, options, disable_measure_noise_injection=True
+        )
+        self.assertFalse(
+            any(
+                type(a).__name__ == "InjectNoise"
+                for instruction in disabled
+                for a in instruction.operation.annotations
+            )
+        )
 
 
 # ---------------------------------------------------------------------------

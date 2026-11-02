@@ -615,12 +615,84 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         with self.assertWarnsRegex(UserWarning, "TREX"):
             find_combined_unique_layers([self.circuit], box_types="measurement")
 
-    def test_gate_and_all_boxes_do_not_warn(self):
-        """Only asking for the measurement boxes alone warns; the default does not."""
-        for box_types in ("gates", "all"):
-            with self.subTest(box_types=box_types), warnings.catch_warnings():
-                warnings.simplefilter("error")
-                find_combined_unique_layers([self.circuit], box_types=box_types)
+    def test_gate_boxes_do_not_warn(self):
+        """Asking for the gate boxes alone does not warn."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            find_combined_unique_layers([self.circuit], box_types="gates")
+
+    def test_all_boxes_warn_unless_trex_is_true(self):
+        """Asking for all the boxes warns that TREX measurement boxes differ, unless ``trex=True``."""
+        with self.assertWarnsRegex(UserWarning, "TREX"):
+            find_combined_unique_layers([self.circuit], box_types="all")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            find_combined_unique_layers([self.circuit], box_types="all", trex=True)
+
+    def test_trex_true_replaces_measurement_boxes_with_the_calibration_layer(self):
+        """With ``trex=True`` only the TREX calibration measurement layer is returned, with the gates."""
+        first = QuantumCircuit(3, 1)
+        first.h(0)
+        first.cx(0, 1)
+        first.measure(0, 0)
+        second = QuantumCircuit(3, 1)
+        second.h(1)
+        second.cx(1, 2)
+        second.measure(2, 0)
+        task = MitigationTask()
+        for box_types, expected_gates in (("gates", True), ("measurement", False), ("all", True)):
+            with self.subTest(box_types=box_types):
+                layers = find_combined_unique_layers(
+                    [first, second], mitigation_types=[task, task], box_types=box_types, trex=True
+                )
+                types = [_find_box_type(x) for x in layers]
+                self.assertEqual(types.count("measurement"), 0 if box_types == "gates" else 1)
+                self.assertEqual("gates" in types, expected_gates)
+        # The calibration layer measures the union of the qubits measured by all the circuits.
+        (calibration,) = find_combined_unique_layers(
+            [first, second], box_types="measurement", trex=True
+        )
+        measures = [op for op in calibration.operation.body.data if op.operation.name == "measure"]
+        self.assertEqual(len(measures), 3)
+        self.assertIsNone(task.circuit)
+
+    def test_trex_true_with_inject_noise_targets_all(self):
+        """``trex=True`` works with noise injection on all boxes: the gate layers and the TREX
+        calibration measurement layer all keep the noise injection the user asked for."""
+        layers = find_combined_unique_layers(
+            [self.circuit], custom_boxing_options={"inject_noise_targets": "all"}, trex=True
+        )
+        by_type = {
+            box_type: [x for x in layers if _find_box_type(x) == box_type]
+            for box_type in ("gates", "measurement")
+        }
+        self.assertTrue(len(by_type["gates"]) > 0)
+        self.assertEqual(len(by_type["measurement"]), 1)
+        for layer in layers:
+            self.assertTrue(
+                any(type(a).__name__ == "InjectNoise" for a in layer.operation.annotations)
+            )
+
+    def test_trex_true_with_a_list_of_equal_boxing_options(self):
+        """The calibration circuit is boxed with the options when all the options in the list are
+        equal."""
+        options = {"inject_noise_targets": "all"}
+        from_list = find_combined_unique_layers(
+            [self.circuit, self.circuit], custom_boxing_options=[options, dict(options)], trex=True
+        )
+        from_dict = find_combined_unique_layers(
+            [self.circuit, self.circuit], custom_boxing_options=options, trex=True
+        )
+        self.assertEqual(from_list, from_dict)
+
+    def test_trex_true_with_different_boxing_options_raises(self):
+        """A single calibration circuit cannot be boxed with different options per circuit."""
+        with self.assertRaisesRegex(ValueError, "must be equal"):
+            find_combined_unique_layers(
+                [self.circuit, self.circuit],
+                custom_boxing_options=[{"inject_noise_targets": "all"}, None],
+                trex=True,
+            )
 
     # --- uniqueness and deduplication ---
 

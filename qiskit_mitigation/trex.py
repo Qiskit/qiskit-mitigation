@@ -51,7 +51,8 @@ class TREX:
         self.boxed_circuit = None
         self._program_item_index = None
 
-    def _edit_boxing_options(self, boxing_options: dict | None) -> dict:
+    @staticmethod
+    def _edit_boxing_options(boxing_options: dict | None) -> dict:
         """Edit boxing options."""
         if boxing_options is None:
             return {"enable_measures": True, "measure_annotations": "all"}
@@ -121,20 +122,22 @@ class TREX:
             raise ValueError(
                 "A TREX must be connected to at least one mitigation task to create a calibration task."
             )
-        cal_qubits = sorted(
-            set().union(
-                *(
-                    task.meas_qubits
-                    if task.meas_qubits is not None
-                    else range(task.circuit.num_qubits)
-                    for task in self.tasks
-                )
-            )
+        cal_qubits = self._calibration_qubits(
+            [task.circuit for task in self.tasks], [task.meas_qubits for task in self.tasks]
         )
+        boxed_circuit = self._prepare_calibration_circuit(
+            max(cal_qubits) + 1,
+            custom_boxing_options,
+            cal_qubits,
+            disable_measure_noise_injection=True,
+        )
+        template_trex_circuit, trex_samplex = build(boxed_circuit)
         self._program_item_index = len(quantum_program.items)
         quantum_program.items.append(
-            self._prepare_calibration_circuit(
-                max(cal_qubits) + 1, num_randomizations, custom_boxing_options, cal_qubits
+            SamplexItem(
+                circuit=template_trex_circuit,
+                samplex=trex_samplex,
+                shape=(num_randomizations,),
             )
         )
 
@@ -169,11 +172,35 @@ class TREX:
             if task_passthrough.get("trex_calibration", None) is not None:
                 task_passthrough["trex_calibration"] = True
 
+    @staticmethod
+    def _calibration_qubits(
+        circuits: Sequence[QuantumCircuit], meas_qubits_list: Sequence[Sequence[int] | None]
+    ) -> list[int]:
+        """Return the qubits measured by the TREX calibration circuit of the given circuits.
+
+        Args:
+            circuits: The circuits of the tasks that use the calibration.
+            meas_qubits_list: For each circuit, the qubits it measures. ``None`` means that all the
+                qubits of the circuit are measured.
+
+        Returns:
+            The sorted union of the qubits measured by the circuits.
+        """
+        return sorted(
+            set().union(
+                *(
+                    meas_qubits if meas_qubits is not None else range(circuit.num_qubits)
+                    for circuit, meas_qubits in zip(circuits, meas_qubits_list, strict=True)
+                )
+            )
+        )
+
     @classmethod
     def _box_circuit(
         cls,
         circuit: QuantumCircuit,
         boxing_options: dict | None,
+        disable_measure_noise_injection: bool = False,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
 
@@ -184,6 +211,9 @@ class TREX:
             circuit: The circuit to group into boxes.
             boxing_options: Dictionary of :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` options.
                 If ``None``, default trex boxing options are used.
+            disable_measure_noise_injection: If ``True`` and ``inject_noise_targets`` is ``"all"`` or
+                ``"measures"``, it is replaced with ``"none"``. The calibration item is built
+                without noise maps, so its measurements must not inject noise.
 
         Returns:
             The boxed circuit.
@@ -206,6 +236,10 @@ class TREX:
             and edited_boxing_options["measure_annotations"] != "twirl"
         ):
             raise ValueError('boxing_options["measure_annotations"] must be `twirl`.')
+        if disable_measure_noise_injection and edited_boxing_options.get(
+            "inject_noise_targets"
+        ) in ("all", "measures"):
+            edited_boxing_options["inject_noise_targets"] = "none"
         try:
             boxing_pm = generate_boxing_pass_manager(**edited_boxing_options)
         except Exception as ex:
@@ -214,27 +248,29 @@ class TREX:
             ) from ex
         return boxing_pm.run(circuit)
 
-    @staticmethod
     def _prepare_calibration_circuit(
+        self,
         num_qubits: int,
-        num_randomizations: int,
         custom_boxing_options: dict | None = None,
         meas_qubits: Sequence[int] | None = None,
-    ) -> SamplexItem:
-        """Creates a TREX calibration circuit.
+        disable_measure_noise_injection: bool = False,
+    ) -> QuantumCircuit:
+        """Creates a boxed TREX calibration circuit.
 
         The calibration circuit has ``num_qubits`` qubits and a ``_meas`` register of the same
-        size, in which qubit ``i`` is measured into bit ``i``.
+        size, in which qubit ``i`` is measured into bit ``i``. The boxed calibration circuit is
+        saved in ``self.boxed_circuit``.
 
         Args:
             num_qubits: The number of qubits of the calibration circuit.
-            num_randomizations: The number of TREX calibration randomizations.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
             meas_qubits: The qubits to measure. Bits of the other qubits are not written. If
                 ``None``, all the ``num_qubits`` qubits are measured.
+            disable_measure_noise_injection: Whether to disable noise injection in the measurement
+                boxes, see :meth:`_box_circuit`.
 
         Returns:
-            Samplex item containing calibration circuit for TREX factors calculation.
+            The boxed calibration circuit for TREX factors calculation.
         """
         classical_cal_reg = ClassicalRegister(num_qubits, name="_meas")
         trex_circuit = QuantumCircuit(num_qubits)
@@ -244,15 +280,10 @@ class TREX:
         else:
             trex_circuit.barrier()
             trex_circuit.measure(list(meas_qubits), [classical_cal_reg[q] for q in meas_qubits])
-        annotated_trex_circuit = TREX._box_circuit(trex_circuit, custom_boxing_options)
-        template_trex_circuit, trex_samplex = build(annotated_trex_circuit)
-        trex_calibration_item = SamplexItem(
-            circuit=template_trex_circuit,
-            samplex=trex_samplex,
-            shape=(num_randomizations,),
+        self.boxed_circuit = TREX._box_circuit(
+            trex_circuit, custom_boxing_options, disable_measure_noise_injection
         )
-
-        return trex_calibration_item
+        return self.boxed_circuit
 
     def compute_noise_model(self, results: QuantumProgramResult) -> PauliLindbladMap:
         """Compute noise model from program results.

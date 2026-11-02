@@ -930,6 +930,26 @@ class TestFindUniqueLayers(unittest.TestCase):
         self.assertIsInstance(layers, list)
         self.assertTrue(len(layers) > 0)
 
+    def test_trex_true_adds_trex_boxing_options(self):
+        """``trex=True`` boxes the measurements as ``prepare`` does for a task with TREX."""
+        qc = _simple_circuit()
+        qc.measure_all()
+        task = MitigationTask()
+        default = task.find_unique_layers(qc)
+        with_trex = task.find_unique_layers(qc, trex=True)
+        self.assertNotEqual(default, with_trex)
+        self.assertEqual(default, task.find_unique_layers(qc, trex=False))
+
+    def test_trex_none_follows_the_task_trex(self):
+        """``trex=None`` adds the TREX boxing options if and only if the task has a TREX."""
+        qc = _simple_circuit()
+        qc.measure_all()
+        task = MitigationTask()
+        without_trex = task.find_unique_layers(qc)
+        task.trex = TREX()
+        self.assertEqual(task.find_unique_layers(qc), task.find_unique_layers(qc, trex=True))
+        self.assertEqual(without_trex, task.find_unique_layers(qc, trex=False))
+
 
 class TestMakeSamplexArguments(unittest.TestCase):
     """Tests for :meth:`MitigationTask._make_samplex_arguments`."""
