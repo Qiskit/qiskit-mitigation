@@ -28,10 +28,22 @@ features:
     learned with a different choice is not found by ``PEC.prepare`` and ``PEA.prepare``, which
     raise a ``ValueError`` about the missing layer.
   - |
+    Added the ``trex`` argument to :func:`~qiskit_mitigation.find_combined_unique_layers` and to
+    ``find_unique_layers`` of the mitigation tasks. It controls whether the boxing options that
+    ``prepare`` adds when a :class:`~qiskit_mitigation.TREX` is used (measurement boxes annotated
+    for all qubits) are added when finding the layers. In ``find_unique_layers`` the default
+    ``trex=None`` adds them if and only if the task has a TREX. In
+    :func:`~qiskit_mitigation.find_combined_unique_layers`, ``trex`` is a ``bool`` (default
+    ``False``) that finds the layers as if all the tasks share a TREX, ignoring the TREX of the
+    given tasks. With ``trex=True`` the measurement layer of the TREX calibration circuit is also
+    returned, exactly as ``TREX.prepare`` creates it (without noise injection), in addition to the
+    measurement layers of the individual circuits.
+  - |
     :func:`~qiskit_mitigation.find_combined_unique_layers` issues a ``UserWarning`` when
-    ``box_types="measurement"`` is requested. The measurement boxes are found without the boxing
-    options that ``prepare`` adds when a :class:`~qiskit_mitigation.TREX` is used, so they do not
-    match the measurement boxes of tasks prepared with TREX.
+    ``box_types`` is ``"measurement"`` or ``"all"``, ``trex`` is ``False`` and at least one of the
+    tasks in ``mitigation_types`` has a :class:`~qiskit_mitigation.TREX`. The measurement boxes are
+    then found without the boxing options that ``prepare`` adds when a TREX is used, so they do
+    not match the measurement boxes of the tasks prepared with TREX.
 upgrade:
   - |
     The programs created by :class:`~qiskit_mitigation.MitigationTask`,

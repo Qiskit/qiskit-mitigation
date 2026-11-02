@@ -105,29 +105,28 @@ def find_combined_unique_layers(
     custom_boxing_options: dict | list[dict] | None = None,
     box_types: Literal["gates", "measurement", "all"] = "all",
     observables: Sequence[ObservablesArray | Sequence[SparsePauliOp]] | None = None,
-    trex: bool | None = None,
+    trex: bool = False,
 ) -> list[CircuitInstruction]:
     """Return the unique boxed layers found across the given circuits using the given boxing options.
 
     The returned list contains one instance of each distinct boxed layer (represented as a :class:`~.CircuitInstruction`) appearing in the input circuits.
-    Some mitigation methods enforce relevant boxing options. By supllying the wanted mitigation methods, these options are enforced when boxing the circuits to find unique layers.
-    Supplying the wanted mitigation methods is recommended to ensure that the unique layers used for learning wiil be equal to those used in execution.
+    Some mitigation methods enforce relevant boxing options. By supplying the wanted mitigation methods, these options are enforced when boxing the circuits to find unique layers.
+    Supplying the wanted mitigation methods is recommended to ensure that the unique layers used for learning will be equal to those used in execution.
     The returned boxes can be filtered so only boxes containing measurements, only boxes containing solely gates or all types of boxes are returned.
 
     .. note::
-        Unless ``trex`` is ``True``, the measurement boxes are found without the boxing options
-        that ``prepare`` adds when a :class:`~qiskit_mitigation.TREX` is used, so they do not match
-        the measurement boxes of a task prepared with TREX. If ``trex`` is ``True``, the
-        measurement boxes of the given circuits are replaced by the measurement layer of the TREX
-        calibration circuit.
+        When a :class:`~qiskit_mitigation.TREX` is used, ``prepare`` adds boxing options to the
+        measurement boxes of the tasks. These options are added here only if ``trex`` is ``True``.
+        Otherwise, the measurement boxes found do not match the measurement boxes of a task prepared
+        with TREX.
 
     Args:
-        circuits: The circuit to find the unique layers for.
+        circuits: The circuits to find the unique layers for.
         mitigation_types: List of initiated mitigation classes that the circuits will be mitigated with. Each mitigation method might enforce boxing options that will affect the unique layers.
             If given, the list must be the same length as ``circuits``.
         custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function to find the unique layers.
             If a single dict is given, the same custom boxing option will be used for all tasks. If ``None`` is given, the default boxing option will be used.
-        box_types: Can be either ``"gates"``, ``"measurements"`` or ``"all"``, corresponding to filter boxes with only gate layers, only measurement layers or all layers, respectively.
+        box_types: Can be either ``"gates"``, ``"measurement"`` or ``"all"``, corresponding to filter boxes with only gate layers, only measurement layers or all layers, respectively.
         observables: If given, one entry (an observables array or a sequence of observables) per
             circuit. The layers are then found for circuits whose measurements are trimmed to the
             active and observed qubits, exactly as when ``prepare`` is called with
@@ -139,38 +138,30 @@ def find_combined_unique_layers(
                 ``prepare`` of the tasks, together with the same observables. The measured qubits
                 change the boxing, so layers learned with a different choice are not found by
                 ``prepare``.
-        trex: Whether to add the boxing options that ``prepare`` enforces when a
-            :class:`~qiskit_mitigation.TREX` is used (measurement boxes annotated for all qubits).
-            If ``True``, these options are added for all circuits, the measurement boxes of the
-            given circuits are filtered out and the measurement layer of the TREX calibration
-            circuit, built from all the given circuits, is returned instead (together with the
-            gate layers, according to ``box_types``). If ``False``, the options are never
-            added. If ``None`` (default), they are added for each circuit if and only if its
-            corresponding task in ``mitigation_types`` has a TREX mitigation. A warning is issued
-            when ``box_types`` is ``"measurement"`` or ``"all"`` and ``trex`` is not ``True``,
-            since the measurement boxes may then not match those of tasks prepared with TREX.
+        trex: Find the layers as if all the tasks share a :class:`~qiskit_mitigation.TREX`. If
+            ``True``, the boxing options that ``prepare`` enforces when a TREX is used (measurement
+            boxes annotated for all qubits) are added for all circuits, and the measurement layer
+            of the TREX calibration circuit is returned as well, exactly as ``TREX.prepare``
+            creates it for tasks that measure the qubits of the given circuits. The
+            measurement layers of the individual circuits are returned too. Whether the tasks in
+            ``mitigation_types`` have a TREX is ignored when finding the layers.
 
     Returns:
         Unique boxed layers found across the given circuits using the given boxing options.
 
     Raises:
-        ValueError: If ``trex`` is ``True`` and ``custom_boxing_options`` is a list of different
-            options, since the single TREX calibration circuit is boxed with a single set of options.
         ValueError: If the length of ``mitigation_types``, ``custom_boxing_options`` or
             ``observables`` does not match the number of circuits.
+        ValueError: If ``trex`` is ``True`` and ``circuits`` is empty.
+        ValueError: If ``trex`` is ``True`` and ``custom_boxing_options`` is a list of different
+            options, since the single TREX calibration circuit is boxed with a single set of options.
         ValueError: If ``observables`` is given and, for some circuit, no qubit is active or
             observed.
+        ValueError: If the boxing options contradict the options required by the mitigation
+            methods or by TREX, or the boxing pass manager fails to run.
     """
     from qiskit_mitigation.mitigation_task import MitigationTask
 
-    if box_types in ["measurement", "all"] and not trex:
-        warnings.warn(
-            "The measurement boxes are found without the boxing options that `prepare` adds when "
-            "a TREX is used, so they do not match the measurement boxes of tasks prepared with "
-            "TREX. Pass `trex=True` to add these boxing options.",
-            UserWarning,
-            stacklevel=2,
-        )
     if mitigation_types is None:
         mitigation_types = [MitigationTask()] * len(circuits)
     if len(mitigation_types) != len(circuits):
@@ -179,6 +170,34 @@ def find_combined_unique_layers(
         raise ValueError("Number of observables does not match number of circuits.")
     if isinstance(custom_boxing_options, list) and len(custom_boxing_options) != len(circuits):
         raise ValueError("Number of custom boxing options does not match number of circuits.")
+    if trex and len(circuits) == 0:
+        raise ValueError("At least one circuit is required when trex=True.")
+    # The calibration circuit is a single circuit, so it can only use a single set of options.
+    trex_boxing_options: dict | None = None
+    if trex:
+        if isinstance(custom_boxing_options, list):
+            trex_boxing_options = custom_boxing_options[0]
+            if any(options != trex_boxing_options for options in custom_boxing_options):
+                raise ValueError(
+                    "With trex=True, all the custom boxing options must be equal, since they are "
+                    "also used for the single TREX calibration circuit."
+                )
+        else:
+            trex_boxing_options = custom_boxing_options
+
+    if (
+        box_types in ("measurement", "all")
+        and not trex
+        and any(task.trex is not None for task in mitigation_types)
+    ):
+        warnings.warn(
+            "Some of the tasks have a TREX, but no TREX boxing options were added, so the "
+            "measurement boxes may not match the measurement boxes of the tasks prepared with "
+            "TREX. Pass `trex=True` to add these boxing options.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     boxing_options_list: list[dict | None]
     if custom_boxing_options is None:
         boxing_options_list = [None] * len(circuits)
@@ -187,20 +206,11 @@ def find_combined_unique_layers(
     else:
         boxing_options_list = list(custom_boxing_options)
 
-    meas_qubits_list: Sequence[list[int] | None]
-    if observables is None:
-        meas_qubits_list = [None] * len(circuits)
-    else:
-        meas_qubits_list = [
-            derive_meas_qubits(circuit, obs, boxing_options)
-            for circuit, obs, boxing_options in zip(
-                circuits, observables, boxing_options_list, strict=True
-            )
+    # The TREX options are added before the measured qubits are derived, as ``prepare`` does
+    if trex:
+        boxing_options_list = [
+            TREX._edit_boxing_options(options) for options in boxing_options_list
         ]
-
-    for i, task in enumerate(mitigation_types):
-        if trex or (trex is None and task.trex is not None):
-            boxing_options_list[i] = TREX._edit_boxing_options(boxing_options_list[i])
 
     meas_qubits_list: Sequence[list[int] | None]
     if observables is None:
@@ -219,35 +229,22 @@ def find_combined_unique_layers(
             mitigation_types, circuits, boxing_options_list, meas_qubits_list, strict=True
         )
     )
-    instructions = (box for boxed_circuit in boxed_circuits for box in boxed_circuit)
+    instructions = [box for boxed_circuit in boxed_circuits for box in boxed_circuit]
+    if trex:
+        # Add the calibration layer, created exactly as ``TREX.prepare`` creates it. Its
+        # annotations differ from those of the measurement boxes of the circuits, so both are kept.
+        cal_qubits = TREX._calibration_qubits(circuits, meas_qubits_list)
+        instructions.extend(
+            TREX()._prepare_calibration_circuit(
+                max(cal_qubits) + 1,
+                trex_boxing_options,
+                cal_qubits,
+                disable_measure_noise_injection=True,
+            )
+        )
     unique_boxes: list[CircuitInstruction] = find_unique_box_instructions(
         instructions=instructions, normalize_annotations=None, undress_boxes=True
     )
-    # add trex circuit
-    if trex:
-        # The measurement boxes of the given circuits are replaced by the TREX calibration layer.
-        unique_boxes = [box for box in unique_boxes if _find_box_type(box) == "gates"]
-        # The calibration circuit is a single circuit, so it can only use a single set of options.
-        trex_boxing_options: dict | None
-        if isinstance(custom_boxing_options, list):
-            trex_boxing_options = custom_boxing_options[0]
-            if any(options != trex_boxing_options for options in custom_boxing_options):
-                raise ValueError(
-                    "With trex=True, all the custom boxing options must be equal, since they are "
-                    "also used for the single TREX calibration circuit."
-                )
-        else:
-            trex_boxing_options = custom_boxing_options
-        cal_qubits = TREX._calibration_qubits(circuits, meas_qubits_list)
-        trex_instance = TREX()
-        trex_instance._prepare_calibration_circuit(
-            max(cal_qubits) + 1, trex_boxing_options, cal_qubits
-        )
-        unique_boxes += find_unique_box_instructions(
-            instructions=trex_instance.boxed_circuit,
-            normalize_annotations=None,
-            undress_boxes=True,
-        )
     box_types_filter = ["gates", "measurement"] if box_types == "all" else (box_types,)
     return [
         unique_box for unique_box in unique_boxes if _find_box_type(unique_box) in box_types_filter

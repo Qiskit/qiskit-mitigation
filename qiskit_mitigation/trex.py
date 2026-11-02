@@ -53,7 +53,20 @@ class TREX:
 
     @staticmethod
     def _edit_boxing_options(boxing_options: dict | None) -> dict:
-        """Edit boxing options."""
+        """Add the boxing options that a task needs in order to use TREX.
+
+        Measurements are enabled and annotated for all qubits. The given dict is not modified.
+
+        Args:
+            boxing_options: The boxing options of a mitigation task. If ``None``, the TREX
+                boxing options only are returned.
+
+        Returns:
+            A new dict with the boxing options, including the options required by TREX.
+
+        Raises:
+            ValueError: If ``boxing_options["enable_measures"]`` is ``False``.
+        """
         if boxing_options is None:
             return {"enable_measures": True, "measure_annotations": "all"}
         edited_boxing_options = boxing_options.copy()
@@ -109,6 +122,10 @@ class TREX:
         ``m + 1`` bits, where ``m`` is the largest measured qubit index, so that column ``i`` of the
         calibration is always circuit qubit ``i``. Columns of qubits that no task measures are not
         measured and always hold zeros.
+
+        The calibration item is built without noise maps, so if ``custom_boxing_options`` sets
+        ``inject_noise_targets`` to ``"all"`` or ``"measures"``, it is replaced with ``"none"`` in
+        the calibration circuit.
 
         Args:
             num_randomizations: Number of randomizations for the TREX calibration.
