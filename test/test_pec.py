@@ -1360,6 +1360,7 @@ class TestPECSlc(unittest.TestCase):
         pec = PEC()
         qc = _simple_circuit()
         pec._slc_local_scales = {}
+        pec._slc_reduced_gamma = 1.0
         noise_maps = {
             "any": PauliLindbladMap.from_sparse_list([("ZZ", (0, 1), 0.01)], qc.num_qubits)
         }
@@ -1392,6 +1393,7 @@ class TestPECSlc(unittest.TestCase):
             for layer in pec_layers
         }
         pec._slc_local_scales = {"m0": np.array([1.0])}
+        pec._slc_reduced_gamma = 1.0
         program = pec.prepare(
             qc,
             [obs],
@@ -1426,6 +1428,7 @@ class TestPECSlc(unittest.TestCase):
             for layer in pec_layers
         }
         pec._slc_local_scales = {}
+        pec._slc_reduced_gamma = 1.0
         with self.assertRaisesRegex(ValueError, "Missing local scale for boxes"):
             pec.prepare(
                 qc,
@@ -1516,53 +1519,23 @@ class TestPECSlc(unittest.TestCase):
         self.assertEqual(passthrough["pec_slc_bias"], pec.slc_bias)
         self.assertAlmostEqual(passthrough["pec_slc_bias"], 0.0, places=6)
 
-    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
-    def test_prepare_with_slc_local_scales_falls_back_to_calculated_gamma(self):
-        """Without a reduced gamma, gamma is calculated from the noise maps."""
-        from qiskit_addon_slc.bounds import (
-            compute_backward_bounds,
-            compute_forward_bounds,
-            compute_local_scales,
-            merge_bounds,
-            tighten_with_speed_limit,
-        )
-
+    def test_prepare_with_slc_local_scales_raises_without_reduced_gamma(self):
+        """``noise_gain='slc_local_scales'`` requires the reduced gamma to be set."""
         pec = PEC()
         qc = _simple_circuit()
-        obs = SparsePauliOp("ZZ")
-        slc_boxing_options = {
-            "add_tags": "unique_box",
-            "inject_noise_strategy": "individual_modification",
-        }
-        boxed_circuit, noise_model_paulis = pec.generate_slc_bounds_computation_input(
-            qc, custom_boxing_options=slc_boxing_options
-        )
-        noise_maps = _mock_slc_noise_maps(pec, qc, slc_boxing_options)
-        fwd = tighten_with_speed_limit(
-            compute_forward_bounds(boxed_circuit, noise_model_paulis, obs),
-            boxed_circuit,
-            noise_model_paulis,
-            obs,
-        )
-        bwd = compute_backward_bounds(boxed_circuit, noise_model_paulis)
-        merged = merge_bounds(boxed_circuit, fwd, bwd, noise_maps)
-        local_scales, sampling_cost, reduced_bias = compute_local_scales(
-            boxed_circuit, merged, noise_maps, sampling_cost_budget=10.0
-        )
-        pec.set_slc_local_scales(local_scales, float(np.sqrt(sampling_cost)), reduced_bias)
+        pec._slc_local_scales = {}
         pec._slc_reduced_gamma = None
-
-        pec.prepare(
-            qc,
-            [obs],
-            parameters=None,
-            custom_boxing_options=slc_boxing_options,
-            noise_maps=noise_maps,
-            noise_gain="slc_local_scales",
-        )
-
-        self.assertIsNotNone(pec.gamma)
-        self.assertAlmostEqual(pec.gamma, 1.3231298123374367, places=6)
+        noise_maps = {
+            "any": PauliLindbladMap.from_sparse_list([("ZZ", (0, 1), 0.01)], qc.num_qubits)
+        }
+        with self.assertRaisesRegex(ValueError, "slc_reduced_gamma is None"):
+            pec.prepare(
+                qc,
+                [SparsePauliOp("ZZ")],
+                parameters=None,
+                noise_maps=noise_maps,
+                noise_gain="slc_local_scales",
+            )
 
 
 if __name__ == "__main__":
