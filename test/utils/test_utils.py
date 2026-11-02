@@ -790,6 +790,16 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
                 trex=True,
             )
 
+    def test_no_circuits_returns_no_layers(self):
+        """Without circuits there are no layers and no calibration circuit, also with ``trex``."""
+        for kwargs in ({}, {"trex": True}, {"trex": True, "custom_boxing_options": []}):
+            for box_types in ("gates", "measurement", "all"):
+                with self.subTest(box_types=box_types, **kwargs), warnings.catch_warnings():
+                    warnings.simplefilter("error")
+                    self.assertEqual(
+                        find_combined_unique_layers([], box_types=box_types, **kwargs), []
+                    )
+
     # --- uniqueness and deduplication ---
 
     def test_duplicate_circuits_produce_same_unique_layers_as_single_circuit(self):

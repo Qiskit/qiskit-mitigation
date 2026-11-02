@@ -152,7 +152,6 @@ def find_combined_unique_layers(
     Raises:
         ValueError: If the length of ``mitigation_types``, ``custom_boxing_options`` or
             ``observables`` does not match the number of circuits.
-        ValueError: If ``trex`` is ``True`` and ``circuits`` is empty.
         ValueError: If ``trex`` is ``True`` and ``custom_boxing_options`` is a list of different
             options, since the single TREX calibration circuit is boxed with a single set of options.
         ValueError: If ``observables`` is given and, for some circuit, no qubit is active or
@@ -170,8 +169,8 @@ def find_combined_unique_layers(
         raise ValueError("Number of observables does not match number of circuits.")
     if isinstance(custom_boxing_options, list) and len(custom_boxing_options) != len(circuits):
         raise ValueError("Number of custom boxing options does not match number of circuits.")
-    if trex and len(circuits) == 0:
-        raise ValueError("At least one circuit is required when trex=True.")
+    if len(circuits) == 0:
+        return []
     # The calibration circuit is a single circuit, so it can only use a single set of options.
     trex_boxing_options: dict | None = None
     if trex:
