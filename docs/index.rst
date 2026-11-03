@@ -45,7 +45,7 @@ documented in the `release notes <https://quantum.cloud.ibm.com/docs/api/qiskit-
    :hidden:
    :caption: Tutorials
 
-   Postselection with non-Markovian error checks <https://quantum.cloud.ibm.com/docs/guides/postselection_with_non_markovian_error_checks.ipynb>
+   Probabilistic error cancellation with logical noise models <https://quantum.cloud.ibm.com/docs/tutorials/probabilistic-error-cancellation-with-logical-noise-models>
 
 .. toctree::
    :hidden:
