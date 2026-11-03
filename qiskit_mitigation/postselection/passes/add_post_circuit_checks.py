@@ -42,10 +42,6 @@ class AddPostCircuitNonMarkovianErrorChecks(TransformationPass):
 
     The added measurements write to new classical registers that are copies of the DAG's registers,
     with modified names (by default, appending ``"_ps"`` to the register name).
-
-    .. note::
-
-      These passes are only supported on Heron QPUs where `fractional gates <http://quantum.cloud.ibm.com/docs/guides/fractional-gates>`__ are supported.
     """
 
     def __init__(
