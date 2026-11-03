@@ -106,6 +106,7 @@ def find_combined_unique_layers(
     box_types: Literal["gates", "measurement", "all"] = "all",
     observables: Sequence[ObservablesArray | Sequence[SparsePauliOp]] | None = None,
     trex: bool = False,
+    trex_custom_boxing_options: dict | None = None,
 ) -> list[CircuitInstruction]:
     """Return the unique boxed layers found across the given circuits using the given boxing options.
 
@@ -145,6 +146,10 @@ def find_combined_unique_layers(
             creates it for tasks that measure the qubits of the given circuits. The
             measurement layers of the individual circuits are returned too. Whether the tasks in
             ``mitigation_types`` have a TREX is ignored when finding the layers.
+        trex_custom_boxing_options: The custom boxing options of the TREX calibration circuit, i.e.
+            the ``custom_boxing_options`` passed to :meth:`~qiskit_mitigation.TREX.prepare`. These are
+            independent of ``custom_boxing_options``, which are the options of the individual
+            tasks. Can be given only if ``trex`` is ``True``.
 
     Returns:
         Unique boxed layers found across the given circuits using the given boxing options.
@@ -152,8 +157,7 @@ def find_combined_unique_layers(
     Raises:
         ValueError: If the length of ``mitigation_types``, ``custom_boxing_options`` or
             ``observables`` does not match the number of circuits.
-        ValueError: If ``trex`` is ``True`` and ``custom_boxing_options`` is a list of different
-            options, since the single TREX calibration circuit is boxed with a single set of options.
+        ValueError: If ``trex_custom_boxing_options`` is given and ``trex`` is ``False``.
         ValueError: If ``observables`` is given and, for some circuit, no qubit is active or
             observed.
         ValueError: If the boxing options contradict the options required by the mitigation
@@ -169,20 +173,10 @@ def find_combined_unique_layers(
         raise ValueError("Number of observables does not match number of circuits.")
     if isinstance(custom_boxing_options, list) and len(custom_boxing_options) != len(circuits):
         raise ValueError("Number of custom boxing options does not match number of circuits.")
+    if trex_custom_boxing_options is not None and not trex:
+        raise ValueError("`trex_custom_boxing_options` can be given only if `trex` is True.")
     if len(circuits) == 0:
         return []
-    # The calibration circuit is a single circuit, so it can only use a single set of options.
-    trex_boxing_options: dict | None = None
-    if trex:
-        if isinstance(custom_boxing_options, list):
-            trex_boxing_options = custom_boxing_options[0]
-            if any(options != trex_boxing_options for options in custom_boxing_options):
-                raise ValueError(
-                    "With trex=True, all the custom boxing options must be equal, since they are "
-                    "also used for the single TREX calibration circuit."
-                )
-        else:
-            trex_boxing_options = custom_boxing_options
 
     if (
         box_types in ("measurement", "all")
@@ -236,7 +230,7 @@ def find_combined_unique_layers(
         instructions.extend(
             TREX()._prepare_calibration_circuit(
                 max(cal_qubits) + 1,
-                trex_boxing_options,
+                trex_custom_boxing_options,
                 cal_qubits,
                 disable_measure_noise_injection=True,
             )

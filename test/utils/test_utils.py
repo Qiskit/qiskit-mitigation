@@ -705,9 +705,9 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
                 )
                 layers = find_combined_unique_layers(
                     [self.circuit],
-                    custom_boxing_options=options,
                     box_types="measurement",
                     trex=True,
+                    trex_custom_boxing_options=options,
                 )
                 (calibration,) = from_prepare
                 self.assertIn(calibration, layers)
@@ -769,25 +769,43 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
                 num_randomizations=4,
             )
 
-    def test_trex_true_with_a_list_of_equal_boxing_options(self):
-        """The calibration circuit is boxed with the options when all the options in the list are
-        equal."""
-        options = {"inject_noise_targets": "all"}
-        from_list = find_combined_unique_layers(
-            [self.circuit, self.circuit], custom_boxing_options=[options, dict(options)], trex=True
+    def test_trex_true_with_different_task_boxing_options(self):
+        """The task options may differ between circuits, since the calibration circuit does not
+        use them."""
+        layers = find_combined_unique_layers(
+            [self.circuit, self.circuit],
+            custom_boxing_options=[{"inject_noise_targets": "all"}, None],
+            box_types="measurement",
+            trex=True,
         )
-        from_dict = find_combined_unique_layers(
-            [self.circuit, self.circuit], custom_boxing_options=options, trex=True
-        )
-        self.assertEqual(from_list, from_dict)
+        self.assertTrue(len(layers) > 0)
 
-    def test_trex_true_with_different_boxing_options_raises(self):
-        """A single calibration circuit cannot be boxed with different options per circuit."""
-        with self.assertRaisesRegex(ValueError, "must be equal"):
+    def test_trex_true_calibration_layer_ignores_the_task_boxing_options(self):
+        """The calibration layer depends only on ``trex_custom_boxing_options``."""
+        task_options = {"twirling_strategy": "all", "add_tags": "unique_box"}
+        (calibration,) = self._calibration_layer([self.circuit])
+        layers = find_combined_unique_layers(
+            [self.circuit],
+            custom_boxing_options=task_options,
+            box_types="measurement",
+            trex=True,
+        )
+        self.assertIn(calibration, layers)
+
+    def test_trex_true_with_task_options_valid_only_for_tasks(self):
+        """Task options that TREX does not accept for its own calibration are fine for the tasks."""
+        task_options = {"enable_measures": True, "measure_annotations": "change_basis"}
+        find_combined_unique_layers([self.circuit], custom_boxing_options=task_options, trex=True)
+        with self.assertRaisesRegex(ValueError, "must be `twirl`"):
             find_combined_unique_layers(
-                [self.circuit, self.circuit],
-                custom_boxing_options=[{"inject_noise_targets": "all"}, None],
-                trex=True,
+                [self.circuit], trex=True, trex_custom_boxing_options=task_options
+            )
+
+    def test_trex_custom_boxing_options_without_trex_raises(self):
+        """The TREX options are meaningless when ``trex`` is ``False``."""
+        with self.assertRaisesRegex(ValueError, "trex_custom_boxing_options"):
+            find_combined_unique_layers(
+                [self.circuit], trex_custom_boxing_options={"add_tags": "unique_box"}
             )
 
     def test_no_circuits_returns_no_layers(self):

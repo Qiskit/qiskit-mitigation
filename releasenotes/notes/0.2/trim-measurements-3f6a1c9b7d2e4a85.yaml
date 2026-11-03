@@ -37,7 +37,9 @@ features:
     ``False``) that finds the layers as if all the tasks share a TREX, ignoring the TREX of the
     given tasks. With ``trex=True`` the measurement layer of the TREX calibration circuit is also
     returned, exactly as ``TREX.prepare`` creates it (without noise injection), in addition to the
-    measurement layers of the individual circuits.
+    measurement layers of the individual circuits. The boxing options of the calibration circuit
+    are given by the new ``trex_custom_boxing_options`` argument, which are the options passed to
+    ``TREX.prepare``, and are independent of the ``custom_boxing_options`` of the tasks.
   - |
     :func:`~qiskit_mitigation.find_combined_unique_layers` issues a ``UserWarning`` when
     ``box_types`` is ``"measurement"`` or ``"all"``, ``trex`` is ``False`` and at least one of the
