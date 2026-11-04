@@ -26,8 +26,8 @@ from qiskit.primitives import PubResult
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, SparsePauliOp
 from qiskit.transpiler import CouplingMap
-from qiskit_mitigation.pec import HAS_SLC, PEC
 from qiskit_mitigation.mitigation_task import MitigationTask
+from qiskit_mitigation.pec import HAS_SLC, PEC
 from qiskit_mitigation.trex import TREX
 from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
