@@ -378,7 +378,7 @@ class GateFolding(MitigationTask):
             custom_boxing_options = trex._edit_boxing_options(custom_boxing_options)
 
         # save variables in the class
-        self._save_basic_variables(
+        prepared_circuit = self._save_basic_variables(
             circuit,
             observables,
             parameters,
@@ -407,7 +407,7 @@ class GateFolding(MitigationTask):
         samplex_items = []
         for noise_factor in self.noise_factors:
             folding_pm = PassManager([GateFoldingPass(noise_factor, folding_method)])
-            folded_circuit = folding_pm.run(circuit)
+            folded_circuit = folding_pm.run(prepared_circuit)
 
             boxed_circuit = self._box_circuit(
                 folded_circuit, self.custom_boxing_options, self.meas_qubits

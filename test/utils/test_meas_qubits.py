@@ -54,14 +54,20 @@ class TestGetActiveQubits(unittest.TestCase):
         qc = QuantumCircuit(3, 3)
         qc.x(0)
         qc.measure([0, 1, 2], [0, 1, 2])
-        self.assertEqual(_get_active_qubits(qc), [0])
+        stripped = qc.remove_final_measurements(inplace=False)
+        self.assertEqual(_get_active_qubits(stripped), [0])
+
+    def test_mid_circuit_measurements_make_qubits_active(self):
+        qc = QuantumCircuit(3, 3)
+        qc.measure(1, 1)
+        qc.x(1)
+        self.assertEqual(_get_active_qubits(qc), [1])
 
     def test_input_circuit_is_not_modified(self):
-        qc = QuantumCircuit(2, 2)
+        qc = QuantumCircuit(2)
         qc.x(0)
-        qc.measure([0, 1], [0, 1])
         _get_active_qubits(qc)
-        self.assertEqual(qc.count_ops().get("measure"), 2)
+        self.assertEqual(qc.count_ops().get("x"), 1)
 
 
 class TestGetObservableQubitIndices(unittest.TestCase):

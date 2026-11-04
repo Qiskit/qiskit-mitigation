@@ -235,7 +235,7 @@ class PEA(MitigationTask):
             custom_boxing_options = trex._edit_boxing_options(custom_boxing_options)
 
         # save variables in the class
-        self._save_basic_variables(
+        prepared_circuit = self._save_basic_variables(
             circuit,
             observables,
             parameters,
@@ -259,7 +259,7 @@ class PEA(MitigationTask):
         )
 
         boxed_circuit = self._box_circuit(
-            self.circuit, self.custom_boxing_options, self.meas_qubits
+            prepared_circuit, self.custom_boxing_options, self.meas_qubits
         )
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex

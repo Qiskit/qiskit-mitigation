@@ -163,23 +163,20 @@ class MitigationTask:
         ):
             edited_boxing_options["measure_annotations"] = "all"
 
-        # Remove any existing final measurements
-        prepared_circuit = circuit.remove_final_measurements(inplace=False)
-
         # Determine which qubits to measure
         if meas_qubits is None:
-            qubits_to_measure = list(prepared_circuit.qubits)
+            qubits_to_measure = list(circuit.qubits)
         else:
-            qubits_to_measure = [prepared_circuit.qubits[q] for q in meas_qubits]
+            qubits_to_measure = [circuit.qubits[q] for q in meas_qubits]
 
         # Add final measurements
         creg = ClassicalRegister(len(qubits_to_measure), "_meas")
         try:
-            prepared_circuit.add_register(creg)
+            circuit.add_register(creg)
         except CircuitError as ex:
             raise ValueError("Name `_meas` is reserved for a dedicated classical register.") from ex
-        prepared_circuit.barrier()
-        prepared_circuit.measure(qubits_to_measure, creg)
+        circuit.barrier()
+        circuit.measure(qubits_to_measure, creg)
 
         try:
             boxing_pm = generate_boxing_pass_manager(**edited_boxing_options)
@@ -187,7 +184,7 @@ class MitigationTask:
             raise ValueError(
                 f"Failed to generate boxing pass manager with the following error, {ex}"
             ) from ex
-        boxed_circuit = boxing_pm.run(prepared_circuit)
+        boxed_circuit = boxing_pm.run(circuit)
         return boxed_circuit
 
     @classmethod
@@ -542,9 +539,13 @@ class MitigationTask:
         # When measurements are not trimmed, all the qubits are measured and both attributes stay ``None``
         self.meas_qubits = None
         self.circuit_num_qubits = None
+        prepared_circuit = circuit.remove_final_measurements(inplace=False)
         if trim_measurements:
-            self.meas_qubits = derive_meas_qubits(circuit, self.observables, custom_boxing_options)
+            self.meas_qubits = derive_meas_qubits(
+                prepared_circuit, self.observables, custom_boxing_options
+            )
             self.circuit_num_qubits = circuit.num_qubits
+        return prepared_circuit
 
     def _extract_item_data(
         self,
@@ -635,12 +636,13 @@ class MitigationTask:
         )
         if trex or (trex is None and self.trex is not None):
             custom_boxing_options = TREX._edit_boxing_options(custom_boxing_options)
+        prepared_circuit = circuit.remove_final_measurements(inplace=False)
         meas_qubits = (
-            derive_meas_qubits(circuit, observables, custom_boxing_options)
+            derive_meas_qubits(prepared_circuit, observables, custom_boxing_options)
             if observables is not None
             else None
         )
-        boxed_circuit = self._box_circuit(circuit, custom_boxing_options, meas_qubits)
+        boxed_circuit = self._box_circuit(prepared_circuit, custom_boxing_options, meas_qubits)
         instructions = (box for box in boxed_circuit)
         unique_boxes: list[CircuitInstruction] = find_unique_box_instructions(
             instructions=instructions, normalize_annotations=None, undress_boxes=True
@@ -715,7 +717,7 @@ class MitigationTask:
                 )
             custom_boxing_options = trex._edit_boxing_options(custom_boxing_options)
         # save variables in the class
-        self._save_basic_variables(
+        prepared_circuit = self._save_basic_variables(
             circuit,
             observables,
             parameters,
@@ -729,7 +731,7 @@ class MitigationTask:
         )
 
         boxed_circuit = self._box_circuit(
-            self.circuit, self.custom_boxing_options, self.meas_qubits
+            prepared_circuit, self.custom_boxing_options, self.meas_qubits
         )
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex

@@ -27,18 +27,17 @@ from qiskit.quantum_info import SparsePauliOp
 def _get_active_qubits(circuit: QuantumCircuit) -> list[int]:
     """Return the sorted indices of the qubits that have non-trivial instructions on them.
 
-    A qubit is active if any instruction other than a barrier or a delay acts on it. Final
-    measurements are not taken into account, since they are replaced when the circuit is boxed.
+    A qubit is active if any instruction other than a barrier or a delay acts on it.
+    The input ``circuit`` is expected to be stripped of end-of-circuit measurements.
 
     Args:
-        circuit: The circuit to find the active qubits of.
+        circuit: The circuit to find the active qubits of, stripped of end-of-circuit measurements.
 
     Returns:
         Sorted list of active qubit indices.
     """
-    stripped_circuit = circuit.remove_final_measurements(inplace=False)
-    idle_wires = set(circuit_to_dag(stripped_circuit).idle_wires(ignore=["barrier", "delay"]))
-    return [index for index, qubit in enumerate(stripped_circuit.qubits) if qubit not in idle_wires]
+    idle_wires = set(circuit_to_dag(circuit).idle_wires(ignore=["barrier", "delay"]))
+    return [index for index, qubit in enumerate(circuit.qubits) if qubit not in idle_wires]
 
 
 def _get_observable_qubit_indices(
@@ -75,8 +74,10 @@ def derive_meas_qubits(
     are measured when measurements are trimmed, so that task preparation and the layer-finding
     functions always agree.
 
+    The input ``circuit`` is expected to be stripped of end-of-circuit measurements.
+
     Args:
-        circuit: The circuit that is going to be measured.
+        circuit: The circuit that is going to be measured, stripped of end-of-circuit measurements.
         observables: The observables whose expectation values are estimated on ``circuit``.
         boxing_options: The boxing options given by the user. Used to warn when
             ``twirling_strategy="all"`` is set, since that strategy boxes all qubits and

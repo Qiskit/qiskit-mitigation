@@ -205,6 +205,10 @@ def find_combined_unique_layers(
             TREX._edit_boxing_options(options) for options in boxing_options_list
         ]
 
+    prepared_circuits = [
+        circuit.remove_final_measurements(inplace=False) for circuit in circuits
+    ]
+
     meas_qubits_list: Sequence[list[int] | None]
     if observables is None:
         meas_qubits_list = [None] * len(circuits)
@@ -212,14 +216,14 @@ def find_combined_unique_layers(
         meas_qubits_list = [
             derive_meas_qubits(circuit, obs, boxing_options)
             for circuit, obs, boxing_options in zip(
-                circuits, observables, boxing_options_list, strict=True
+                prepared_circuits, observables, boxing_options_list, strict=True
             )
         ]
 
     boxed_circuits = (
         task._box_circuit(circuit, boxing_options, meas_qubits)
         for task, circuit, boxing_options, meas_qubits in zip(
-            mitigation_types, circuits, boxing_options_list, meas_qubits_list, strict=True
+            mitigation_types, prepared_circuits, boxing_options_list, meas_qubits_list, strict=True
         )
     )
     instructions = [box for boxed_circuit in boxed_circuits for box in boxed_circuit]
