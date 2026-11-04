@@ -22,8 +22,9 @@ from qiskit import QuantumCircuit
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import SparsePauliOp
 from qiskit_mitigation.utils.meas_qubits import (
+    _contiguous_runs,
     _expand_meas_data,
-    _expand_meas_data_and_flips,
+    _expand_meas_data_and_apply_flips,
     _get_active_qubits,
     _get_observable_qubit_indices,
     derive_meas_qubits,
@@ -155,16 +156,77 @@ class TestExpandMeasData(unittest.TestCase):
         with self.assertRaises(ValueError):
             _expand_meas_data(data, None, 4)
 
-    def test_data_and_flips_are_both_expanded(self):
-        data = np.ones((1, 2), dtype=bool)
-        flips = np.zeros((1, 2), dtype=bool)
-        new_data, new_flips = _expand_meas_data_and_flips(data, flips, [1, 2], 4)
-        np.testing.assert_array_equal(new_data, [[False, True, True, False]])
-        np.testing.assert_array_equal(new_flips, [[False, False, False, False]])
+    def test_matches_fancy_index_reference(self):
+        """Both the slice path and the many-runs path agree with plain fancy-index assignment."""
+        rng = np.random.default_rng(1)
+        num_qubits = 60
+        layouts = {
+            "single qubit": [7],
+            "first qubit": [0],
+            "last qubit": [num_qubits - 1],
+            "one run": list(range(10, 40)),
+            "all qubits": list(range(num_qubits)),
+            "few runs": [0, 1, 2, 10, 11, 30, 45, 46],
+            "many runs": list(range(0, num_qubits, 2)),
+        }
+        for name, meas_qubits in layouts.items():
+            for shape in [(5, len(meas_qubits)), (2, 3, 4, len(meas_qubits))]:
+                with self.subTest(layout=name, shape=shape):
+                    data = rng.integers(0, 2, shape).astype(bool)
+                    reference = np.zeros((*shape[:-1], num_qubits), dtype=bool)
+                    reference[..., meas_qubits] = data
+                    expanded = _expand_meas_data(data, meas_qubits, num_qubits)
+                    np.testing.assert_array_equal(expanded, reference)
+                    self.assertTrue(expanded.flags.c_contiguous)
 
-    def test_missing_flips_stay_none(self):
-        _, flips = _expand_meas_data_and_flips(np.ones((1, 2), dtype=bool), None, [0, 1], 4)
-        self.assertIsNone(flips)
+    def test_non_contiguous_input_is_expanded(self):
+        base = np.arange(24).reshape(2, 3, 4)[..., ::2]  # non-contiguous, last axis of length 2
+        expanded = _expand_meas_data(base, [1, 4], 6)
+        np.testing.assert_array_equal(expanded[..., [1, 4]], base)
+        np.testing.assert_array_equal(expanded[..., [0, 2, 3, 5]], 0)
+
+    def test_no_measured_qubits_gives_zeros(self):
+        expanded = _expand_meas_data(np.ones((2, 0), dtype=bool), [], 3)
+        np.testing.assert_array_equal(expanded, np.zeros((2, 3), dtype=bool))
+
+    def test_contiguous_runs(self):
+        self.assertEqual(_contiguous_runs([3]), [(3, 4)])
+        self.assertEqual(_contiguous_runs([0, 1, 2]), [(0, 3)])
+        self.assertEqual(_contiguous_runs([0, 1, 4, 6, 7]), [(0, 2), (4, 5), (6, 8)])
+
+    def test_flips_are_applied_before_expanding(self):
+        data = np.array([[True, True]])
+        flips = np.array([[True, False]])
+        expanded = _expand_meas_data_and_apply_flips(data, flips, [1, 2], 4)
+        np.testing.assert_array_equal(expanded, [[False, False, True, False]])
+
+    def test_flips_equal_expanding_both_and_xoring(self):
+        rng = np.random.default_rng(2)
+        meas_qubits = [0, 1, 5, 6, 7, 20]
+        data = rng.integers(0, 2, (2, 3, 8, 6)).astype(bool)
+        flips = rng.integers(0, 2, data.shape).astype(bool)
+        expected = _expand_meas_data(data, meas_qubits, 25) ^ _expand_meas_data(
+            flips, meas_qubits, 25
+        )
+        result = _expand_meas_data_and_apply_flips(data.copy(), flips, meas_qubits, 25)
+        np.testing.assert_array_equal(result, expected)
+
+    def test_missing_flips_only_expand(self):
+        expanded = _expand_meas_data_and_apply_flips(np.ones((1, 2), dtype=bool), None, [0, 1], 4)
+        np.testing.assert_array_equal(expanded, [[True, True, False, False]])
+
+    def test_flips_without_trimming_are_applied_in_place(self):
+        data = np.array([[True, False]])
+        result = _expand_meas_data_and_apply_flips(data, np.array([[True, True]]), None, None)
+        self.assertIs(result, data)
+        np.testing.assert_array_equal(result, [[False, True]])
+
+    def test_flips_helper_only_one_argument_raises(self):
+        data = np.ones((1, 2), dtype=bool)
+        with self.assertRaises(ValueError):
+            _expand_meas_data_and_apply_flips(data, None, [0, 1], None)
+        with self.assertRaises(ValueError):
+            _expand_meas_data_and_apply_flips(data, None, None, 4)
 
 
 if __name__ == "__main__":

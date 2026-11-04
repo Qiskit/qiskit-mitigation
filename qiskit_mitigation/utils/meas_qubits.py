@@ -106,6 +106,31 @@ def derive_meas_qubits(
     return meas_qubits
 
 
+# Above this number of contiguous runs of measured qubits, copying run by run with slices is slower
+# than moving whole qubit-major slabs.
+_MAX_SLICE_RUNS = 28
+
+
+def _contiguous_runs(indices: Sequence[int]) -> list[tuple[int, int]]:
+    """Group indices into maximal runs of consecutive increasing values.
+
+    Args:
+        indices: Non-empty sequence of indices.
+
+    Returns:
+        List of half-open ``(start, stop)`` ranges, in order, that together cover ``indices``.
+    """
+    runs: list[tuple[int, int]] = []
+    start = prev = indices[0]
+    for index in indices[1:]:
+        if index != prev + 1:
+            runs.append((start, prev + 1))
+            start = index
+        prev = index
+    runs.append((start, prev + 1))
+    return runs
+
+
 def _expand_meas_data(
     data: np.ndarray,
     meas_qubits: Sequence[int] | None,
@@ -138,35 +163,56 @@ def _expand_meas_data(
         )
     if meas_qubits is None or circuit_num_qubits is None:
         return data
+    meas_qubits = list(meas_qubits)
     expanded = np.zeros((*data.shape[:-1], circuit_num_qubits), dtype=data.dtype)
-    expanded[..., list(meas_qubits)] = data
-    return expanded
+    if not meas_qubits:
+        return expanded
+    runs = _contiguous_runs(meas_qubits)
+    if len(runs) <= _MAX_SLICE_RUNS:
+        # Slice assignment copies whole rows, unlike fancy indexing on the last axis, which
+        # looks up the target column of every element separately.
+        src = 0
+        for start, stop in runs:
+            expanded[..., start:stop] = data[..., src : src + stop - start]
+            src += stop - start
+        return expanded
+    # Many runs: move whole contiguous qubit-major slabs instead of single elements.
+    qubit_major = np.zeros((circuit_num_qubits, *data.shape[:-1]), dtype=data.dtype)
+    qubit_major[meas_qubits] = np.moveaxis(data, -1, 0)
+    return np.ascontiguousarray(np.moveaxis(qubit_major, 0, -1))
 
 
-def _expand_meas_data_and_flips(
+def _expand_meas_data_and_apply_flips(
     data: np.ndarray,
     meas_flips: np.ndarray | None,
     meas_qubits: Sequence[int] | None,
     circuit_num_qubits: int | None,
-) -> tuple[np.ndarray, np.ndarray | None]:
-    """Expand compressed measurement data and its measurement flips to full-circuit width.
+) -> np.ndarray:
+    """Apply measurement flips to compressed measurement data and expand it to full-circuit width.
 
-    Both arrays are expanded with :func:`_expand_meas_data`. If ``meas_qubits`` and
-    ``circuit_num_qubits`` are ``None`` the inputs are returned unchanged.
+    The flips are XORed into ``data`` *before* expanding, so that only one array is expanded.
+    This is equivalent to expanding both arrays and XORing them, since the columns of the
+    unmeasured qubits are zero in both. If ``meas_qubits`` and ``circuit_num_qubits`` are ``None``
+    the flips are applied to ``data`` without expanding.
 
     Args:
-        data: The measurement data, with last axis of length ``len(meas_qubits)``.
+        data: The measurement data, with last axis of length ``len(meas_qubits)``. The flips are
+            applied to it in place, so pass a copy if the original must be kept.
         meas_flips: The measurement flips of ``data``, or ``None`` if there are none.
         meas_qubits: Sorted list of circuit qubit indices that were measured.
         circuit_num_qubits: Total number of qubits in the original circuit.
 
     Returns:
-        The expanded data and the expanded flips (``None`` if ``meas_flips`` is ``None``).
+        The data with the flips applied, expanded to full-circuit width.
 
     Raises:
         ValueError: If only one of ``meas_qubits`` and ``circuit_num_qubits`` is given.
     """
-    data = _expand_meas_data(data, meas_qubits, circuit_num_qubits)
+    if (meas_qubits is None) != (circuit_num_qubits is None):
+        raise ValueError(
+            "``meas_qubits`` and ``circuit_num_qubits`` must be provided together, "
+            "but only one was given."
+        )
     if meas_flips is not None:
-        meas_flips = _expand_meas_data(meas_flips, meas_qubits, circuit_num_qubits)
-    return data, meas_flips
+        data ^= meas_flips
+    return _expand_meas_data(data, meas_qubits, circuit_num_qubits)

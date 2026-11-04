@@ -32,7 +32,7 @@ from samplomatic.quantum_program import (
 
 from qiskit_mitigation.mitigation_task import MitigationTask
 from qiskit_mitigation.trex import TREX
-from qiskit_mitigation.utils.meas_qubits import _expand_meas_data_and_flips
+from qiskit_mitigation.utils.meas_qubits import _expand_meas_data_and_apply_flips
 from qiskit_mitigation.zne.extrapolation import (
     ExtrapolatorType,
     _validate_noise_factors,
@@ -584,9 +584,10 @@ class PEA(MitigationTask):
                 "Dedicated creg ``'_meas'`` is missing from one of the results."
             ) from ex
 
-        # Expand compressed measurement data back to full-circuit width, so that all downstream
-        # postprocessing can use the observable qubit indices without any remapping.
-        data, meas_flips = _expand_meas_data_and_flips(
+        # Apply the measurement flips and expand the compressed measurement data back to
+        # full-circuit width, so that all downstream postprocessing can use the observable qubit
+        # indices without any remapping.
+        data = _expand_meas_data_and_apply_flips(
             data, item_result.get("measurement_flips._meas", None), meas_qubits, circuit_num_qubits
         )
 
@@ -653,10 +654,6 @@ class PEA(MitigationTask):
                 param_basis_pairs = PEA._compute_param_basis_pairs(
                     observables_arr, param_shape, broadcast_shape, meas_bases
                 )
-
-        # Apply measurement flips if present
-        if meas_flips is not None:
-            data ^= meas_flips
 
         (
             zero_extrapolated_exp_vals,

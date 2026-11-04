@@ -60,7 +60,7 @@ from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.utils.expectation_values import (
     _compute_single_term_exp_val_with_twirl_variance,
 )
-from qiskit_mitigation.utils.meas_qubits import _expand_meas_data_and_flips
+from qiskit_mitigation.utils.meas_qubits import _expand_meas_data_and_apply_flips
 from qiskit_mitigation.utils.measurement_bases import (
     _convert_pauli_basis,
     _identify_measure_basis,
@@ -1037,18 +1037,15 @@ class GateFolding(MitigationTask):
                     f"``item_result['_meas']`` has ``{data.ndim}`` axes, expected ``4`` or ``5``."
                 )
 
-            # Expand compressed measurement data back to full-circuit width, so that all downstream
-            # postprocessing can use the observable qubit indices without any remapping.
-            data, meas_flips = _expand_meas_data_and_flips(
+            # Apply the measurement flips and expand the compressed measurement data back to
+            # full-circuit width, so that all downstream postprocessing can use the observable
+            # qubit indices without any remapping.
+            data = _expand_meas_data_and_apply_flips(
                 data,
                 item_result.get("measurement_flips._meas", None),
                 meas_qubits,
                 circuit_num_qubits,
             )
-
-            # Apply measurement flips if present
-            if meas_flips is not None:
-                data ^= meas_flips
 
             noise_amplified_data.append(data)
 

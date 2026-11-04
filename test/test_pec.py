@@ -533,6 +533,30 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
         )
         self.assertIsInstance(result, PubResult)
 
+    def test_non_broadcast_measurement_flips_applied_exactly_once(self):
+        """Flipping one qubit of all-zero data turns the ``ZZ`` expectation value into ``-1``."""
+        data = np.zeros((2, 1, 4, 2), dtype=bool)
+        flips = np.zeros_like(data)
+        flips[..., 0] = True
+        for meas_qubits, num_qubits in [(None, None), ([0, 2], 3)]:
+            with self.subTest(meas_qubits=meas_qubits):
+                label = "ZZ" if meas_qubits is None else "ZIZ"
+                item_result = {
+                    "_meas": data.copy(),
+                    "pauli_signs": np.zeros((2, 1, 1), dtype=bool),
+                    "measurement_flips._meas": flips,
+                }
+                result = PEC.compute_expectation_value_pec(
+                    item_result,
+                    observables=ObservablesArray([SparsePauliOp(label)]),
+                    gamma=1.0,
+                    broadcast_obs_and_params=False,
+                    meas_bases=[Pauli(label)],
+                    meas_qubits=meas_qubits,
+                    circuit_num_qubits=num_qubits,
+                )
+                np.testing.assert_allclose(result.data.evs, -1.0)
+
     def test_non_broadcast_list_observable_skips_conversion(self):
         """Passing a list of ``SparsePauliOp`` in non-broadcast mode must skip the
         ``ObservablesArray`` conversion."""

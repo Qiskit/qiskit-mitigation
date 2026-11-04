@@ -476,6 +476,24 @@ class TestComputeExpectationValue(unittest.TestCase):
         )
         self.assertIsInstance(pub_result, PubResult)
 
+    def test_non_broadcast_measurement_flips_applied_exactly_once(self):
+        """Flipping one qubit of all-zero data turns the ``ZZ`` expectation value into ``-1``."""
+        data = np.zeros((2, 1, 4, 2), dtype=bool)
+        flips = np.zeros_like(data)
+        flips[..., 0] = True
+        for meas_qubits, num_qubits in [(None, None), ([0, 2], 3)]:
+            with self.subTest(meas_qubits=meas_qubits):
+                result = {"_meas": data.copy(), "measurement_flips._meas": flips}
+                pub_result = MitigationTask.compute_expectation_value(
+                    result,
+                    self._obs("ZZ" if meas_qubits is None else "ZIZ"),
+                    broadcast_obs_and_params=False,
+                    meas_bases=[Pauli("ZZ" if meas_qubits is None else "ZIZ")],
+                    meas_qubits=meas_qubits,
+                    circuit_num_qubits=num_qubits,
+                )
+                np.testing.assert_allclose(pub_result.data.evs, -1.0)
+
 
 # ---------------------------------------------------------------------------
 # MitigationTask._process_broadcasted_expectation_values  (static method)

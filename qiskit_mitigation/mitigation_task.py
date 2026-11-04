@@ -45,7 +45,10 @@ from qiskit_mitigation.utils.expectation_values import (
     _compute_single_term_exp_val_with_twirl_variance,
     executor_expectation_values,
 )
-from qiskit_mitigation.utils.meas_qubits import _expand_meas_data_and_flips, derive_meas_qubits
+from qiskit_mitigation.utils.meas_qubits import (
+    _expand_meas_data_and_apply_flips,
+    derive_meas_qubits,
+)
 from qiskit_mitigation.utils.measurement_bases import (
     _convert_pauli_basis,
     _identify_measure_basis,
@@ -1034,9 +1037,10 @@ class MitigationTask:
         except KeyError as ex:
             raise ValueError("Dedicated creg ``'_meas'`` is missing from the results.") from ex
 
-        # Expand compressed measurement data back to full-circuit width, so that all downstream
-        # postprocessing can use the observable qubit indices without any remapping.
-        data, meas_flips = _expand_meas_data_and_flips(
+        # Apply the measurement flips and expand the compressed measurement data back to
+        # full-circuit width, so that all downstream postprocessing can use the observable qubit
+        # indices without any remapping.
+        data = _expand_meas_data_and_apply_flips(
             data, item_result.get("measurement_flips._meas", None), meas_qubits, circuit_num_qubits
         )
 
@@ -1058,10 +1062,6 @@ class MitigationTask:
                 raise ValueError(
                     f"``item_result['_meas']`` has ``{data.ndim}`` axes, expected ``4``."
                 )
-
-            # Apply measurement flips if present
-            if meas_flips is not None:
-                data ^= meas_flips
 
             if isinstance(observables, SparsePauliOp):
                 observables = ObservablesArray.coerce(observables)
@@ -1102,7 +1102,6 @@ class MitigationTask:
             (observables, meas_bases),
             meas_basis_axis=1,
             avg_axis=0,
-            measurement_flips=meas_flips,
             rescale_factors=trex_scale_factors,
         )
 
