@@ -1,0 +1,4 @@
+---
+features:
+  - |
+    Allow filter box types in the ``find_unique_layers`` function of the various mitigation classes.
