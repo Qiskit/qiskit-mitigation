@@ -22,6 +22,8 @@ PEC (:mod:`qiskit_mitigation.pec`)
    .. automethod:: postprocess
    .. automethod:: compute_expectation_value_pec
    .. automethod:: create_instance_from_passthrough_data
+   .. automethod:: generate_slc_bounds_computation_input
+   .. automethod:: set_slc_local_scales
 
 
 

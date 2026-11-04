@@ -7,4 +7,5 @@ Qiskit mitigation Guides
    Gate folding with custom extrapolation <gate_folding_with_custom_extrapolation.ipynb>
    PEA with noise learning <pea_with_noise_learning.ipynb>
    PEC with TREX <PEC_with_TREX.ipynb>
+   PEC with Shaded-Lightcones <PEC_with_SLC.ipynb>
    Postselection with non-Markovian error checks <postselection_with_non_markovian_error_checks.ipynb>
