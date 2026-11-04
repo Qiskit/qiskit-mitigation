@@ -19,11 +19,11 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
 from qiskit import QuantumCircuit
-from qiskit.circuit import BoxOp, CircuitInstruction
+from qiskit.circuit import CircuitInstruction
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import SparsePauliOp
 from samplomatic.quantum_program import QuantumProgramResult
-from samplomatic.utils import find_unique_box_instructions, undress_box
+from samplomatic.utils import find_unique_box_instructions
 
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.utils.meas_qubits import derive_meas_qubits
@@ -205,9 +205,7 @@ def find_combined_unique_layers(
             TREX._edit_boxing_options(options) for options in boxing_options_list
         ]
 
-    prepared_circuits = [
-        circuit.remove_final_measurements(inplace=False) for circuit in circuits
-    ]
+    prepared_circuits = [circuit.remove_final_measurements(inplace=False) for circuit in circuits]
 
     meas_qubits_list: Sequence[list[int] | None]
     if observables is None:
@@ -244,34 +242,7 @@ def find_combined_unique_layers(
     )
     box_types_filter = ["gates", "measurement"] if box_types == "all" else (box_types,)
     return [
-        unique_box for unique_box in unique_boxes if _find_box_type(unique_box) in box_types_filter
+        unique_box
+        for unique_box in unique_boxes
+        if MitigationTask._find_box_type(unique_box) in box_types_filter
     ]
-
-
-def _find_box_type(instruction: BoxOp) -> str:
-    """Find the type of :class:`~qiskit.circuit.BoxOp` that ``instruction`` contains.
-
-    Args:
-        instruction: The instruction to get the type of.
-
-    Returns:
-        The box type. Can be one of ``"gates"`` or ``"measurement"``.
-
-    Raises:
-        ValueError: If ``instruction`` does not contain a box.
-    """
-    box = instruction.operation
-    if (name := box.name) != "box":
-        raise ValueError(f"Expected a 'box' but found '{name}'.")
-
-    undressed_box = undress_box(box)
-
-    if len(undressed_box.body) == 0:
-        return "gates"
-
-    contain_measurement = any(op.name.startswith("measure") for op in undressed_box.body)
-
-    if contain_measurement:
-        return "measurement"
-
-    return "gates"

@@ -18,11 +18,16 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+import pytest
 from qiskit import QuantumCircuit
+from qiskit.circuit import Parameter
+from qiskit.exceptions import MissingOptionalLibraryError
 from qiskit.primitives import PubResult
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, SparsePauliOp
-from qiskit_mitigation.pec import PEC
+from qiskit.transpiler import CouplingMap
+from qiskit_mitigation.mitigation_task import MitigationTask
+from qiskit_mitigation.pec import HAS_SLC, PEC
 from qiskit_mitigation.trex import TREX
 from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
@@ -197,6 +202,18 @@ class TestPECBoxCircuit(unittest.TestCase):
             {"inject_noise_strategy": "individual_modification"},
         )
         self.assertIsInstance(boxed, QuantumCircuit)
+
+    def test_gate_boxes_have_type_gates(self):
+        """Gate boxes produced by PEC boxing must be classified as ``'gates'``."""
+        circuit = _simple_circuit()
+        circuit.measure_all()
+        boxed = PEC._box_circuit(circuit, None)
+        gate_boxes = [
+            instr for instr in boxed if instr.operation.name == "box" and len(instr.clbits) == 0
+        ]
+        self.assertTrue(len(gate_boxes) > 0, "PEC boxing should produce at least one gate box")
+        for box in gate_boxes:
+            self.assertEqual(MitigationTask._find_box_type(box), "gates")
 
 
 # ---------------------------------------------------------------------------
@@ -1133,6 +1150,448 @@ class TestPECLearnedLayersMatch(LearnedLayersTestsMixin, unittest.TestCase):
     """Noise learned for a different trimming is not found by :meth:`PEC.prepare`."""
 
     task_cls = PEC
+
+
+# ---------------------------------------------------------------------------
+# SLC integration
+# ---------------------------------------------------------------------------
+
+
+def _mock_slc_noise_maps(
+    pec: PEC,
+    circuit: QuantumCircuit,
+    custom_boxing_options: dict,
+    rate: float = 0.01,
+) -> dict[str, PauliLindbladMap]:
+    """Return mock learned noise maps for testing SLC integration."""
+    from qiskit_addon_slc.utils import generate_noise_model_paulis
+
+    pec_layers = [
+        layer
+        for layer in pec.find_unique_layers(circuit, custom_boxing_options)
+        if get_annotation(layer.operation, InjectNoise)
+    ]
+    noise_model_paulis = generate_noise_model_paulis(pec_layers, None, circuit)
+    noise_maps = {}
+    for ref, paulis in noise_model_paulis.items():
+        sparse = paulis.to_sparse_list()
+        rates = [0.0] + [rate] * (len(sparse) - 1)
+        noise_maps[ref] = PauliLindbladMap.from_sparse_list(
+            [(p, qbs, r) for (p, qbs), r in zip(sparse, rates, strict=True)],
+            circuit.num_qubits,
+        )
+    return noise_maps
+
+
+class TestPECSlc(unittest.TestCase):
+    """Tests for the shaded light cones (SLC) integration of :class:`PEC`."""
+
+    # -- init ---------------------------------------------------------------
+
+    def test_init_slc_attributes_are_none(self):
+        """All SLC attributes must be ``None`` on a fresh instance."""
+        pec = PEC()
+        for name in (
+            "_slc_local_scales",
+            "_slc_reduced_gamma",
+            "_slc_bias",
+        ):
+            self.assertIsNone(getattr(pec, name))
+
+    # -- generate_slc_bounds_computation_input -------------
+
+    def test_compute_bounds_raises_when_slc_missing(self):
+        """Without the optional dependency, a ``MissingOptionalLibraryError`` must be raised."""
+        with patch.object(HAS_SLC, "_bool", False), self.assertRaises(MissingOptionalLibraryError):
+            PEC().generate_slc_bounds_computation_input(_simple_circuit())
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_get_bounds_input_reuses_saved_boxed_circuit(self):
+        """Calling the function twice with the same circuit object reuses the saved boxed circuit."""
+        pec = PEC()
+        qc = _simple_circuit()
+        boxed, _ = pec.generate_slc_bounds_computation_input(qc)
+        boxed_again, noise_model_paulis = pec.generate_slc_bounds_computation_input(qc)
+        self.assertIs(boxed_again, boxed)
+        self.assertGreater(len(noise_model_paulis), 0)
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_compute_bounds_raises_on_parametric_circuit(self):
+        """A circuit with unbound parameters must raise ``ValueError``."""
+        qc = QuantumCircuit(1)
+        qc.rx(Parameter("a"), 0)
+        with self.assertRaisesRegex(ValueError, "unbounded parameters"):
+            PEC().generate_slc_bounds_computation_input(qc)
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_generate_slc_bounds_computation_input_work_with_compute_bounds(self):
+        """generate_slc_bounds_computation_input results enable computing bounds."""
+        from qiskit_addon_slc.bounds import (
+            compute_backward_bounds,
+            compute_forward_bounds,
+            tighten_with_speed_limit,
+        )
+
+        pec = PEC()
+        qc = _simple_circuit()
+        obs = SparsePauliOp("ZZ")
+        slc_boxing_options = {
+            "add_tags": "unique_box",
+            "inject_noise_strategy": "individual_modification",
+        }
+        boxed_circuit, noise_model_paulis = pec.generate_slc_bounds_computation_input(
+            qc, custom_boxing_options=slc_boxing_options
+        )
+        forward = tighten_with_speed_limit(
+            compute_forward_bounds(boxed_circuit, noise_model_paulis, obs),
+            boxed_circuit,
+            noise_model_paulis,
+            obs,
+        )
+        backward = compute_backward_bounds(boxed_circuit, noise_model_paulis)
+
+        self.assertIsInstance(forward, dict)
+        self.assertIsInstance(backward, dict)
+        self.assertEqual(forward.keys(), backward.keys())
+        self.assertGreater(len(forward), 0)
+        self.assertIsNotNone(pec.boxed_circuit)
+
+        expected_fwd_rates = [
+            2.0,
+            2.0,
+            0.0,
+            2.0,
+            2.0,
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            0.0,
+            0.0,
+            2.0,
+            2.0,
+            2.0,
+            0.0,
+        ]
+        expected_bwd_rates = [
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            0.0,
+            2.0,
+            2.0,
+            2.0,
+            0.0,
+            2.0,
+            2.0,
+            2.0,
+            0.0,
+        ]
+        np.testing.assert_allclose(forward["m0"].rates, expected_fwd_rates)
+        np.testing.assert_allclose(backward["m0"].rates, expected_bwd_rates)
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_compute_bounds_with_coupling_map(self):
+        """Bounds can be computed with an explicit coupling map."""
+        from qiskit_addon_slc.bounds import compute_backward_bounds, compute_forward_bounds
+
+        pec = PEC()
+        qc = _simple_circuit()
+        obs = SparsePauliOp("ZZ")
+        cmap = CouplingMap([(0, 1), (1, 0)])
+        boxed_circuit, noise_model_paulis = pec.generate_slc_bounds_computation_input(
+            qc, coupling_map=cmap
+        )
+        forward = compute_forward_bounds(boxed_circuit, noise_model_paulis, obs)
+        backward = compute_backward_bounds(boxed_circuit, noise_model_paulis)
+        self.assertIsInstance(forward, dict)
+        self.assertIsInstance(backward, dict)
+        key = next(iter(forward))
+        expected_fwd_rates = [
+            2.0,
+            2.0,
+            0.0,
+            2.0,
+            2.0,
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            0.0,
+            0.0,
+            2.0,
+            2.0,
+            2.0,
+            0.0,
+        ]
+        expected_bwd_rates = [
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            0.0,
+            2.0,
+            2.0,
+            2.0,
+            0.0,
+            2.0,
+            2.0,
+            2.0,
+            0.0,
+        ]
+        np.testing.assert_allclose(forward[key].rates, expected_fwd_rates)
+        np.testing.assert_allclose(backward[key].rates, expected_bwd_rates)
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_compute_bounds_does_not_modify_custom_boxing_options(self):
+        """The user supplied ``custom_boxing_options`` must be copied, not modified."""
+        options = {"enable_measures": True}
+        PEC().generate_slc_bounds_computation_input(
+            _simple_circuit(), custom_boxing_options=options
+        )
+        self.assertEqual(options, {"enable_measures": True})
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_get_bounds_input_sets_default_inject_noise_strategy(self):
+        """An unspecified ``inject_noise_strategy`` must default to ``individual_modification``."""
+        pec = PEC()
+        options = {"enable_measures": True}
+        pec.generate_slc_bounds_computation_input(_simple_circuit(), custom_boxing_options=options)
+        self.assertEqual(
+            pec.custom_boxing_options["inject_noise_strategy"], "individual_modification"
+        )
+        self.assertNotIn("inject_noise_strategy", options)
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_get_bounds_input_raises_on_wrong_inject_noise_strategy(self):
+        """Any ``inject_noise_strategy`` other than ``individual_modification`` must raise."""
+        with self.assertRaisesRegex(ValueError, "individual_modification"):
+            PEC().generate_slc_bounds_computation_input(
+                _simple_circuit(),
+                custom_boxing_options={"inject_noise_strategy": "no_modification"},
+            )
+
+    # -- set_slc_local_scales -----------------------------------------------
+
+    def test_set_slc_local_scales_stores_all_attributes(self):
+        """set_slc_local_scales must save local_scales, reduced_gamma, and reduced_bias."""
+        pec = PEC()
+        scales = {"m0": np.array([1.0, 0.0, 1.0])}
+        pec.set_slc_local_scales(scales, reduced_gamma=1.15, reduced_bias=0.02)
+        self.assertEqual(pec.slc_local_scales, scales)
+        self.assertAlmostEqual(pec.slc_reduced_gamma, 1.15)
+        self.assertAlmostEqual(pec.slc_bias, 0.02)
+
+    def test_set_slc_local_scales_bias_defaults_to_none(self):
+        """When reduced_bias is omitted, slc_bias must be None."""
+        pec = PEC()
+        scales = {"m0": np.array([1.0])}
+        pec.set_slc_local_scales(scales, reduced_gamma=1.0)
+        self.assertIsNone(pec.slc_bias)
+
+    # -- prepare with noise_gain="slc_local_scales" -------------------------
+
+    def test_prepare_raises_without_local_scales(self):
+        """``noise_gain='slc_local_scales'`` requires the local scales to be computed first."""
+        qc = _simple_circuit()
+        noise_maps = {
+            "any": PauliLindbladMap.from_sparse_list([("ZZ", (0, 1), 0.01)], qc.num_qubits)
+        }
+        with self.assertRaisesRegex(ValueError, "slc_local_scales"):
+            PEC().prepare(
+                qc,
+                [SparsePauliOp("ZZ")],
+                parameters=None,
+                noise_maps=noise_maps,
+                noise_gain="slc_local_scales",
+            )
+
+    def test_prepare_with_slc_local_scales_invalid_inject_noise_strategy(self):
+        """``noise_gain='slc_local_scales'`` requires individual_modification strategy."""
+        pec = PEC()
+        qc = _simple_circuit()
+        pec._slc_local_scales = {}
+        pec._slc_reduced_gamma = 1.0
+        noise_maps = {
+            "any": PauliLindbladMap.from_sparse_list([("ZZ", (0, 1), 0.01)], qc.num_qubits)
+        }
+        with self.assertRaisesRegex(ValueError, "individual_modification"):
+            pec.prepare(
+                qc,
+                [SparsePauliOp("ZZ")],
+                parameters=None,
+                custom_boxing_options={"inject_noise_strategy": "whole_layer"},
+                noise_maps=noise_maps,
+                noise_gain="slc_local_scales",
+            )
+
+    def test_prepare_with_slc_local_scales_defaults_to_individual_modification(self):
+        """``noise_gain='slc_local_scales'`` defaults inject_noise_strategy to individual_modification."""
+        pec = PEC()
+        qc = _simple_circuit()
+        obs = SparsePauliOp("ZZ")
+        pec_layers = [
+            layer
+            for layer in pec.find_unique_layers(
+                qc, {"inject_noise_strategy": "individual_modification"}
+            )
+            if get_annotation(layer.operation, InjectNoise)
+        ]
+        noise_maps = {
+            get_annotation(layer.operation, InjectNoise).ref: PauliLindbladMap.from_sparse_list(
+                [("ZZ", (0, 1), 0.01)], qc.num_qubits
+            )
+            for layer in pec_layers
+        }
+        pec._slc_local_scales = {"m0": np.array([1.0])}
+        pec._slc_reduced_gamma = 1.0
+        program = pec.prepare(
+            qc,
+            [obs],
+            parameters=None,
+            custom_boxing_options=None,
+            noise_maps=noise_maps,
+            noise_gain="slc_local_scales",
+        )
+        self.assertIsInstance(program, QuantumProgram)
+        self.assertEqual(
+            pec.custom_boxing_options["inject_noise_strategy"], "individual_modification"
+        )
+
+    def test_prepare_with_slc_local_scales_raises_on_missing_box_scale(self):
+        """``noise_gain='slc_local_scales'`` raises ValueError if any modifier ref is missing in local scales."""
+        pec = PEC()
+        qc = _simple_circuit()
+        obs = SparsePauliOp("ZZ")
+        slc_boxing_options = {
+            "add_tags": "unique_box",
+            "inject_noise_strategy": "individual_modification",
+        }
+        pec_layers = [
+            layer
+            for layer in pec.find_unique_layers(qc, slc_boxing_options)
+            if get_annotation(layer.operation, InjectNoise)
+        ]
+        noise_maps = {
+            get_annotation(layer.operation, InjectNoise).ref: PauliLindbladMap.from_sparse_list(
+                [("ZZ", (0, 1), 0.01)], qc.num_qubits
+            )
+            for layer in pec_layers
+        }
+        pec._slc_local_scales = {}
+        pec._slc_reduced_gamma = 1.0
+        with self.assertRaisesRegex(ValueError, "Missing local scale for boxes"):
+            pec.prepare(
+                qc,
+                [obs],
+                parameters=None,
+                custom_boxing_options=slc_boxing_options,
+                noise_maps=noise_maps,
+                noise_gain="slc_local_scales",
+            )
+
+    def test_prepare_with_individual_modification_requires_slc_local_scales(self):
+        """prepare with individual_modification and a non-slc_local_scales noise_gain must raise."""
+        pec = PEC()
+        qc = _simple_circuit()
+        slc_boxing_options = {
+            "add_tags": "unique_box",
+            "inject_noise_strategy": "individual_modification",
+        }
+        pec_layers = [
+            layer
+            for layer in pec.find_unique_layers(qc, slc_boxing_options)
+            if get_annotation(layer.operation, InjectNoise)
+        ]
+        noise_maps = {
+            get_annotation(layer.operation, InjectNoise).ref: PauliLindbladMap.from_sparse_list(
+                [("ZZ", (0, 1), 0.01)], qc.num_qubits
+            )
+            for layer in pec_layers
+        }
+        with self.assertRaisesRegex(ValueError, "slc_local_scales"):
+            pec.prepare(
+                qc,
+                [SparsePauliOp("ZZ")],
+                parameters=None,
+                custom_boxing_options=slc_boxing_options,
+                noise_maps=noise_maps,
+                noise_gain=0.5,
+            )
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_prepare_with_slc_local_scales_uses_reduced_gamma(self):
+        """The reduced gamma from set_slc_local_scales must be used by prepare."""
+        from qiskit_addon_slc.bounds import (
+            compute_backward_bounds,
+            compute_forward_bounds,
+            compute_local_scales,
+            merge_bounds,
+            tighten_with_speed_limit,
+        )
+
+        pec = PEC()
+        qc = _simple_circuit()
+        obs = SparsePauliOp("ZZ")
+        slc_boxing_options = {
+            "add_tags": "unique_box",
+            "inject_noise_strategy": "individual_modification",
+        }
+        boxed_circuit, noise_model_paulis = pec.generate_slc_bounds_computation_input(
+            qc, custom_boxing_options=slc_boxing_options
+        )
+        noise_maps = _mock_slc_noise_maps(pec, qc, slc_boxing_options)
+        fwd = tighten_with_speed_limit(
+            compute_forward_bounds(boxed_circuit, noise_model_paulis, obs),
+            boxed_circuit,
+            noise_model_paulis,
+            obs,
+        )
+        bwd = compute_backward_bounds(boxed_circuit, noise_model_paulis)
+        merged = merge_bounds(boxed_circuit, fwd, bwd, noise_maps)
+        local_scales, sampling_cost, reduced_bias = compute_local_scales(
+            boxed_circuit, merged, noise_maps, sampling_cost_budget=10.0
+        )
+        pec.set_slc_local_scales(local_scales, float(np.sqrt(sampling_cost)), reduced_bias)
+
+        program = pec.prepare(
+            qc,
+            [obs],
+            parameters=None,
+            custom_boxing_options=slc_boxing_options,
+            noise_maps=noise_maps,
+            noise_gain="slc_local_scales",
+        )
+
+        self.assertIsInstance(program, QuantumProgram)
+        self.assertEqual(pec.gamma, pec.slc_reduced_gamma)
+        self.assertAlmostEqual(pec.gamma, 1.1502737988572271, places=6)
+        passthrough = program.passthrough_data["qiskit_mitigation"][0]
+        self.assertEqual(passthrough["pec_slc_bias"], pec.slc_bias)
+        self.assertAlmostEqual(passthrough["pec_slc_bias"], 0.0, places=6)
+
+    def test_prepare_with_slc_local_scales_raises_without_reduced_gamma(self):
+        """``noise_gain='slc_local_scales'`` requires the reduced gamma to be set."""
+        pec = PEC()
+        qc = _simple_circuit()
+        pec._slc_local_scales = {}
+        pec._slc_reduced_gamma = None
+        noise_maps = {
+            "any": PauliLindbladMap.from_sparse_list([("ZZ", (0, 1), 0.01)], qc.num_qubits)
+        }
+        with self.assertRaisesRegex(ValueError, "slc_reduced_gamma is None"):
+            pec.prepare(
+                qc,
+                [SparsePauliOp("ZZ")],
+                parameters=None,
+                noise_maps=noise_maps,
+                noise_gain="slc_local_scales",
+            )
 
 
 if __name__ == "__main__":

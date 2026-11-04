@@ -20,7 +20,14 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 from qiskit import QuantumCircuit
-from qiskit.circuit import CircuitInstruction, ClassicalRegister, Instruction, Parameter
+from qiskit.circuit import (
+    BoxOp,
+    CircuitInstruction,
+    ClassicalRegister,
+    Gate,
+    Instruction,
+    Parameter,
+)
 from qiskit.primitives import PubResult
 from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.observables_array import ObservablesArray
@@ -967,6 +974,86 @@ class TestFindUniqueLayers(unittest.TestCase):
         task.trex = TREX()
         self.assertEqual(task.find_unique_layers(qc), task.find_unique_layers(qc, trex=True))
         self.assertEqual(without_trex, task.find_unique_layers(qc, trex=False))
+
+    def test_box_types_filter(self):
+        """``box_types`` must filter the returned layers by their type."""
+        task = MitigationTask()
+        qc = _simple_circuit()
+        qc.measure_all()
+        all_layers = task.find_unique_layers(qc, box_types="all")
+        gate_layers = task.find_unique_layers(qc, box_types="gates")
+        meas_layers = task.find_unique_layers(qc, box_types="measurement")
+        self.assertTrue(len(gate_layers) > 0)
+        self.assertTrue(len(meas_layers) > 0)
+        self.assertEqual(len(all_layers), len(gate_layers) + len(meas_layers))
+        for layer in gate_layers:
+            self.assertEqual(MitigationTask._find_box_type(layer), "gates")
+        for layer in meas_layers:
+            self.assertEqual(MitigationTask._find_box_type(layer), "measurement")
+
+
+# ---------------------------------------------------------------------------
+# MitigationTask._find_box_type
+# ---------------------------------------------------------------------------
+
+
+class TestFindBoxType(unittest.TestCase):
+    """Tests for :meth:`MitigationTask._find_box_type` using real boxed circuits."""
+
+    def setUp(self):
+        self.circuit = _simple_circuit()
+        self.circuit.measure_all()
+
+    def _get_all_boxes(self, circuit: QuantumCircuit) -> list[CircuitInstruction]:
+        """Box a circuit with MitigationTask and return all CircuitInstructions."""
+        boxed = MitigationTask._box_circuit(circuit, None)
+        return [instr for instr in boxed if instr.operation.name == "box"]
+
+    def test_find_box_type_raises_for_non_box_instruction(self):
+        """_find_box_type must raise ValueError when passed a non-box instruction."""
+        plain = QuantumCircuit(2)
+        plain.h(0)
+        instr = next(iter(plain))
+        with self.assertRaises(ValueError):
+            MitigationTask._find_box_type(instr)
+
+    def test_measurement_box_has_type_measurement(self):
+        """A box that contains measurement operations must return 'measurement'."""
+        boxes = self._get_all_boxes(self.circuit)
+        measurement_boxes = [b for b in boxes if len(b.clbits) > 0]
+        self.assertTrue(len(measurement_boxes) > 0, "Expected at least one measurement box")
+        for box in measurement_boxes:
+            self.assertEqual(MitigationTask._find_box_type(box), "measurement")
+
+    def test_gate_box_has_type_gates(self):
+        """A box that contains only standard gates must return 'gates'."""
+        boxes = self._get_all_boxes(self.circuit)
+        gate_boxes = [b for b in boxes if len(b.clbits) == 0]
+        self.assertTrue(len(gate_boxes) > 0, "Expected at least one gate-only box")
+        for box in gate_boxes:
+            self.assertEqual(MitigationTask._find_box_type(box), "gates")
+
+    def test_return_value_is_known_type(self):
+        """_find_box_type must return one of the recognised type strings."""
+        known_types = {"gates", "measurement"}
+        boxes = self._get_all_boxes(self.circuit)
+        for box in boxes:
+            self.assertIn(MitigationTask._find_box_type(box), known_types)
+
+    def test_empty_body_box_returns_gates(self):
+        """A box with zero body instructions must return ``'gates'``."""
+        empty_box = BoxOp(QuantumCircuit(1))
+        instr = CircuitInstruction(operation=empty_box, qubits=[], clbits=[])
+        self.assertEqual(MitigationTask._find_box_type(instr), "gates")
+
+    def test_gate_only_body_returns_gates(self):
+        """A box whose body contains only gates (no measurements) must return ``'gates'``."""
+        custom = Gate("mygate", 1, [])
+        inner = QuantumCircuit(1)
+        inner.append(custom, [0])
+        box = BoxOp(inner)
+        instr = CircuitInstruction(operation=box, qubits=[], clbits=[])
+        self.assertEqual(MitigationTask._find_box_type(instr), "gates")
 
 
 class TestMakeSamplexArguments(unittest.TestCase):

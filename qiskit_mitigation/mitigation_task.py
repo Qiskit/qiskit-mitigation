@@ -19,11 +19,11 @@ import warnings
 from collections import defaultdict
 from collections.abc import Sequence
 from functools import lru_cache
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 from qiskit import QuantumCircuit
-from qiskit.circuit import CircuitInstruction, ClassicalRegister
+from qiskit.circuit import BoxOp, CircuitInstruction, ClassicalRegister
 from qiskit.circuit.exceptions import CircuitError
 from qiskit.primitives import DataBin, PubResult
 from qiskit.primitives.containers.bindings_array import BindingsArray
@@ -38,7 +38,7 @@ from samplomatic.quantum_program import (
 )
 from samplomatic.samplex import Samplex
 from samplomatic.transpiler import generate_boxing_pass_manager
-from samplomatic.utils import find_unique_box_instructions, get_annotation
+from samplomatic.utils import find_unique_box_instructions, get_annotation, undress_box
 
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.utils.expectation_values import (
@@ -597,18 +597,74 @@ class MitigationTask:
                     return True
         return False
 
+    def _get_saved_boxed_circuit(
+        self, circuit: QuantumCircuit, custom_boxing_options: dict | None
+    ) -> QuantumCircuit | None:
+        """Return the boxed circuit saved in the instance if it can be used instead of boxing ``circuit`` again.
+
+        The saved boxed circuit can be used if it exists, it was created from the given ``circuit`` object
+        with all the qubits measured (no trimmed measurements), and ``custom_boxing_options`` is either
+        ``None`` or equal to the saved boxing options.
+        Otherwise, ``None`` is returned.
+        """
+        if (
+            self.boxed_circuit is not None
+            and self.circuit is circuit
+            and self.meas_qubits is None
+            and (
+                custom_boxing_options is None or custom_boxing_options == self.custom_boxing_options
+            )
+        ):
+            return self.boxed_circuit
+        return None
+
+    @staticmethod
+    def _find_box_type(instruction: BoxOp) -> str:
+        """Find the type of :class:`~qiskit.circuit.BoxOp` that ``instruction`` contains.
+
+        Args:
+            instruction: The instruction to get the type of.
+
+        Returns:
+            The box type. Can be one of ``"gates"`` or ``"measurement"``.
+
+        Raises:
+            ValueError: If ``instruction`` does not contain a box.
+        """
+        box = instruction.operation
+        if (name := box.name) != "box":
+            raise ValueError(f"Expected a 'box' but found '{name}'.")
+
+        undressed_box = undress_box(box)
+
+        if len(undressed_box.body) == 0:
+            return "gates"
+
+        contain_measurement = any(op.name.startswith("measure") for op in undressed_box.body)
+
+        if contain_measurement:
+            return "measurement"
+
+        return "gates"
+
     def find_unique_layers(
         self,
         circuit: QuantumCircuit,
         custom_boxing_options: dict | None = None,
+        box_types: Literal["gates", "measurement", "all"] = "all",
         observables: ObservablesArray | Sequence[SparsePauliOp] | None = None,
         trex: bool | None = None,
     ) -> list[CircuitInstruction]:
         """Return the unique boxed layers of the given circuit using the given boxing options.
 
+        If the instance already holds a boxed circuit of the given ``circuit`` (for example, after calling ``prepare``),
+        and ``custom_boxing_options`` is ``None`` or equal to the saved boxing options, the saved boxed circuit is used
+        instead of boxing the circuit again.
+
         Args:
             circuit: The circuit to found its unique layers.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+            box_types: Can be either ``"gates"``, ``"measurement"`` or ``"all"``, corresponding to filter boxes with only gate layers, only measurement layers or all layers, respectively.
             observables: If given, the layers are found for a circuit whose measurements are
                 trimmed to the active and observed qubits, exactly as when ``prepare`` is called
                 with ``trim_measurements=True`` and the same observables. If ``None`` (default),
@@ -631,23 +687,34 @@ class MitigationTask:
         Raises:
             ValueError: If ``observables`` is given and no qubit is active or observed.
         """
-        custom_boxing_options = (
-            {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
-        )
-        if trex or (trex is None and self.trex is not None):
-            custom_boxing_options = TREX._edit_boxing_options(custom_boxing_options)
-        prepared_circuit = circuit.remove_final_measurements(inplace=False)
-        meas_qubits = (
-            derive_meas_qubits(prepared_circuit, observables, custom_boxing_options)
-            if observables is not None
-            else None
-        )
-        boxed_circuit = self._box_circuit(prepared_circuit, custom_boxing_options, meas_qubits)
+        # A saved boxed circuit is reused only if it was boxed exactly as requested here: all the
+        # qubits measured (no ``observables``) and the same TREX boxing options.
+        boxed_circuit = None
+        if observables is None and (trex is None or trex == (self.trex is not None)):
+            boxed_circuit = self._get_saved_boxed_circuit(circuit, custom_boxing_options)
+        if boxed_circuit is None:
+            custom_boxing_options = (
+                {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
+            )
+            if trex or (trex is None and self.trex is not None):
+                custom_boxing_options = TREX._edit_boxing_options(custom_boxing_options)
+            prepared_circuit = circuit.remove_final_measurements(inplace=False)
+            meas_qubits = (
+                derive_meas_qubits(prepared_circuit, observables, custom_boxing_options)
+                if observables is not None
+                else None
+            )
+            boxed_circuit = self._box_circuit(prepared_circuit, custom_boxing_options, meas_qubits)
         instructions = (box for box in boxed_circuit)
         unique_boxes: list[CircuitInstruction] = find_unique_box_instructions(
             instructions=instructions, normalize_annotations=None, undress_boxes=True
         )
-        return unique_boxes
+        box_types_filter = ["gates", "measurement"] if box_types == "all" else (box_types,)
+        return [
+            unique_box
+            for unique_box in unique_boxes
+            if self._find_box_type(unique_box) in box_types_filter
+        ]
 
     def prepare(
         self,

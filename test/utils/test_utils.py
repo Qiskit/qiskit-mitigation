@@ -20,12 +20,11 @@ import warnings
 
 import numpy as np
 from qiskit import QuantumCircuit
-from qiskit.circuit import BoxOp, CircuitInstruction, Gate
+from qiskit.circuit import CircuitInstruction
 from qiskit.quantum_info import PauliLindbladMap, SparsePauliOp
 from qiskit_mitigation import PEC, MitigationTask
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.utils.utils import (
-    _find_box_type,
     find_combined_unique_layers,
     load_tasks_from_result,
 )
@@ -351,92 +350,6 @@ class TestLoadTasksFromResultMitigationTypes(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# find_box_type — unit tests
-# ---------------------------------------------------------------------------
-
-
-class TestFindBoxType(unittest.TestCase):
-    """Tests for find_box_type using real boxed circuits."""
-
-    def setUp(self):
-        self.circuit = _simple_circuit()
-
-    def _get_all_boxes(self, circuit: QuantumCircuit) -> list[CircuitInstruction]:
-        """Box a circuit with MitigationTask and return all CircuitInstructions."""
-        boxed = MitigationTask._box_circuit(circuit, None)
-        return [instr for instr in boxed if instr.operation.name == "box"]
-
-    def test_find_box_type_raises_for_non_box_instruction(self):
-        """find_box_type must raise ValueError when passed a non-box instruction."""
-        # Iterate to find an instruction that is NOT a box
-        # Use a simple gate circuit without boxing to get a non-box instruction
-        plain = QuantumCircuit(2)
-        plain.h(0)
-        for instr in plain:
-            with self.assertRaises(ValueError):
-                _find_box_type(instr)
-            break  # only test the first non-box instruction
-
-    def test_measurement_box_has_type_measurement(self):
-        """A box that contains measurement operations must return 'measurement'."""
-        boxes = self._get_all_boxes(self.circuit)
-        measurement_boxes = [b for b in boxes if len(b.clbits) > 0]
-        self.assertTrue(len(measurement_boxes) > 0, "Expected at least one measurement box")
-        for box in measurement_boxes:
-            self.assertEqual(_find_box_type(box), "measurement")
-
-    def test_gate_box_has_type_gates(self):
-        """A box that contains only standard gates must return 'gates'."""
-        boxes = self._get_all_boxes(self.circuit)
-        gate_boxes = [b for b in boxes if len(b.clbits) == 0]
-        self.assertTrue(len(gate_boxes) > 0, "Expected at least one gate-only box")
-        for box in gate_boxes:
-            self.assertEqual(_find_box_type(box), "gates")
-
-    def test_pec_gate_box_has_type_gates(self):
-        """Gate boxes produced by PEC boxing must also return 'gates'."""
-        boxed = PEC._box_circuit(self.circuit, None)
-        gate_boxes = [
-            instr for instr in boxed if instr.operation.name == "box" and len(instr.clbits) == 0
-        ]
-        self.assertTrue(len(gate_boxes) > 0, "PEC boxing should produce at least one gate box")
-        for box in gate_boxes:
-            self.assertEqual(_find_box_type(box), "gates")
-
-    def test_return_value_is_string(self):
-        """_find_box_type must always return a string."""
-        boxes = self._get_all_boxes(self.circuit)
-        for box in boxes:
-            result = _find_box_type(box)
-            self.assertIsInstance(result, str)
-
-    def test_return_value_is_known_type(self):
-        """_find_box_type must return one of the recognised type strings."""
-        known_types = {"gates", "measurement"}
-        boxes = self._get_all_boxes(self.circuit)
-        for box in boxes:
-            self.assertIn(_find_box_type(box), known_types)
-
-    def test_empty_body_box_returns_gates(self):
-        """A box with zero body instructions must return ``'gates'``."""
-
-        # BoxOp wrapping an empty circuit produces a body with len == 0
-        empty_box = BoxOp(QuantumCircuit(1))
-        instr = CircuitInstruction(operation=empty_box, qubits=[], clbits=[])
-        self.assertEqual(_find_box_type(instr), "gates")
-
-    def test_gate_only_body_returns_gates(self):
-        """A box whose body contains only gates (no measurements) must return ``'gates'``."""
-
-        custom = Gate("mygate", 1, [])
-        inner = QuantumCircuit(1)
-        inner.append(custom, [0])
-        box = BoxOp(inner)
-        instr = CircuitInstruction(operation=box, qubits=[], clbits=[])
-        self.assertEqual(_find_box_type(instr), "gates")
-
-
-# ---------------------------------------------------------------------------
 # find_combined_unique_layers — argument validation
 # ---------------------------------------------------------------------------
 
@@ -496,14 +409,14 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
             [self.circuit, self.circuit], mitigation_types=tasks, box_types="all"
         )
         # PEC boxing adds an extra gate box; combined result has gates + measurement types
-        types = {_find_box_type(layer) for layer in combined_layers}
+        types = {MitigationTask._find_box_type(layer) for layer in combined_layers}
         self.assertIn("gates", types)
         self.assertIn("measurement", types)
 
     def test_all_without_mitigation_types(self):
         """box_types='all' without mitigation_types defaults to MitigationTask boxing."""
         layers = find_combined_unique_layers([self.circuit, self.circuit], box_types="all")
-        types = {_find_box_type(layer) for layer in layers}
+        types = {MitigationTask._find_box_type(layer) for layer in layers}
         self.assertIn("gates", types)
         self.assertIn("measurement", types)
 
@@ -513,7 +426,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
             [self.circuit], mitigation_types=[MitigationTask()], box_types="all"
         )
         self.assertTrue(len(layers) > 0)
-        types = {_find_box_type(layer) for layer in layers}
+        types = {MitigationTask._find_box_type(layer) for layer in layers}
         self.assertIn("gates", types)
         self.assertIn("measurement", types)
 
@@ -523,7 +436,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
             [self.circuit], mitigation_types=[PEC()], box_types="all"
         )
         self.assertTrue(len(layers) > 0)
-        types = {_find_box_type(layer) for layer in layers}
+        types = {MitigationTask._find_box_type(layer) for layer in layers}
         self.assertIn("gates", types)
         self.assertIn("measurement", types)
 
@@ -539,14 +452,14 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         )
         self.assertTrue(len(combined_layers) > 0, "Expected at least one gate box")
         for layer in combined_layers:
-            self.assertEqual(_find_box_type(layer), "gates")
+            self.assertEqual(MitigationTask._find_box_type(layer), "gates")
 
     def test_gates_only_without_mitigation_types(self):
         """box_types='gates' without mitigation_types returns only gate boxes."""
         layers = find_combined_unique_layers([self.circuit, self.circuit], box_types="gates")
         self.assertTrue(len(layers) > 0)
         for layer in layers:
-            self.assertEqual(_find_box_type(layer), "gates")
+            self.assertEqual(MitigationTask._find_box_type(layer), "gates")
 
     def test_gates_only_with_single_mitigation_task(self):
         """box_types='gates' with a single MitigationTask returns only gate boxes."""
@@ -555,7 +468,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
-            self.assertEqual(_find_box_type(layer), "gates")
+            self.assertEqual(MitigationTask._find_box_type(layer), "gates")
 
     def test_gates_only_with_single_pec(self):
         """box_types='gates' with a single PEC task returns only gate boxes."""
@@ -564,7 +477,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
-            self.assertEqual(_find_box_type(layer), "gates")
+            self.assertEqual(MitigationTask._find_box_type(layer), "gates")
 
     # --- box_types='measurement' ---
 
@@ -578,14 +491,14 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         )
         self.assertTrue(len(combined_layers) > 0, "Expected at least one measurement box")
         for layer in combined_layers:
-            self.assertEqual(_find_box_type(layer), "measurement")
+            self.assertEqual(MitigationTask._find_box_type(layer), "measurement")
 
     def test_measurement_only_without_mitigation_types(self):
         """box_types='measurement' without mitigation_types returns only measurement boxes."""
         layers = find_combined_unique_layers([self.circuit, self.circuit], box_types="measurement")
         self.assertTrue(len(layers) > 0)
         for layer in layers:
-            self.assertEqual(_find_box_type(layer), "measurement")
+            self.assertEqual(MitigationTask._find_box_type(layer), "measurement")
 
     def test_measurement_only_with_single_mitigation_task(self):
         """box_types='measurement' with a single MitigationTask returns only measurement boxes."""
@@ -594,7 +507,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
-            self.assertEqual(_find_box_type(layer), "measurement")
+            self.assertEqual(MitigationTask._find_box_type(layer), "measurement")
 
     def test_measurement_only_with_single_pec(self):
         """box_types='measurement' with a single PEC task returns only measurement boxes."""
@@ -603,7 +516,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         )
         self.assertTrue(len(layers) > 0)
         for layer in layers:
-            self.assertEqual(_find_box_type(layer), "measurement")
+            self.assertEqual(MitigationTask._find_box_type(layer), "measurement")
 
     def test_measurement_boxes_warn_when_a_task_has_a_trex_but_trex_is_false(self):
         """The measurement boxes would not match those of a task prepared with TREX, so the
@@ -672,7 +585,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
                 layers = find_combined_unique_layers(
                     [first, second], box_types=box_types, observables=observables, trex=True
                 )
-                types = [_find_box_type(x) for x in layers]
+                types = [MitigationTask._find_box_type(x) for x in layers]
                 self.assertEqual(types.count("measurement"), expected_measurements)
                 self.assertEqual("gates" in types, expected_gates)
         # The circuits measure qubits [0, 1] and [1, 2], the calibration layer measures [0, 1, 2]
