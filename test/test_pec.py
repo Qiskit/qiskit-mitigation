@@ -27,6 +27,7 @@ from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, SparsePauliOp
 from qiskit.transpiler import CouplingMap
 from qiskit_mitigation.pec import HAS_SLC, PEC
+from qiskit_mitigation.mitigation_task import MitigationTask
 from qiskit_mitigation.trex import TREX
 from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
@@ -199,6 +200,18 @@ class TestPECBoxCircuit(unittest.TestCase):
             {"inject_noise_strategy": "individual_modification"},
         )
         self.assertIsInstance(boxed, QuantumCircuit)
+
+    def test_gate_boxes_have_type_gates(self):
+        """Gate boxes produced by PEC boxing must be classified as ``'gates'``."""
+        circuit = _simple_circuit()
+        circuit.measure_all()
+        boxed = PEC._box_circuit(circuit, None)
+        gate_boxes = [
+            instr for instr in boxed if instr.operation.name == "box" and len(instr.clbits) == 0
+        ]
+        self.assertTrue(len(gate_boxes) > 0, "PEC boxing should produce at least one gate box")
+        for box in gate_boxes:
+            self.assertEqual(MitigationTask._find_box_type(box), "gates")
 
 
 # ---------------------------------------------------------------------------

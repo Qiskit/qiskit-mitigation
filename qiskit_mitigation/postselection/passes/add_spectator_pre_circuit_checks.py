@@ -45,10 +45,6 @@ class AddSpectatorPreCircuitNonMarkovianErrorChecks(TransformationPass):
 
     The added measurements write to a new classical register with one bit per spectator qubit, named
     ``spectator_creg_name`` (default ``"spec_pre"``).
-
-    .. note::
-
-      These passes are only supported on Heron QPUs where `fractional gates <http://quantum.cloud.ibm.com/docs/guides/fractional-gates>`__ are supported.
     """
 
     def __init__(
