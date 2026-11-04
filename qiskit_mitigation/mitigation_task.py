@@ -19,11 +19,11 @@ import warnings
 from collections import defaultdict
 from collections.abc import Sequence
 from functools import lru_cache
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 from qiskit import QuantumCircuit
-from qiskit.circuit import CircuitInstruction, ClassicalRegister
+from qiskit.circuit import BoxOp, CircuitInstruction, ClassicalRegister
 from qiskit.circuit.exceptions import CircuitError
 from qiskit.primitives import DataBin, PubResult
 from qiskit.primitives.containers.bindings_array import BindingsArray
@@ -38,7 +38,7 @@ from samplomatic.quantum_program import (
 )
 from samplomatic.samplex import Samplex
 from samplomatic.transpiler import generate_boxing_pass_manager
-from samplomatic.utils import find_unique_box_instructions, get_annotation
+from samplomatic.utils import find_unique_box_instructions, get_annotation, undress_box
 
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.utils.expectation_values import (
@@ -563,14 +563,47 @@ class MitigationTask:
                     return True
         return False
 
+    @staticmethod
+    def _find_box_type(instruction: BoxOp) -> str:
+        """Find the type of :class:`~qiskit.circuit.BoxOp` that ``instruction`` contains.
+
+        Args:
+            instruction: The instruction to get the type of.
+
+        Returns:
+            The box type. Can be one of ``"gates"`` or ``"measurement"``.
+
+        Raises:
+            ValueError: If ``instruction`` does not contain a box.
+        """
+        box = instruction.operation
+        if (name := box.name) != "box":
+            raise ValueError(f"Expected a 'box' but found '{name}'.")
+
+        undressed_box = undress_box(box)
+
+        if len(undressed_box.body) == 0:
+            return "gates"
+
+        contain_measurement = any(op.name.startswith("measure") for op in undressed_box.body)
+
+        if contain_measurement:
+            return "measurement"
+
+        return "gates"
+
     def find_unique_layers(
-        self, circuit: QuantumCircuit, custom_boxing_options: dict | None = None
+        self,
+        circuit: QuantumCircuit,
+        custom_boxing_options: dict | None = None,
+        box_types: Literal["gates", "measurement", "all"] = "all",
     ) -> list[CircuitInstruction]:
         """Return the unique boxed layers of the given circuit using the given boxing options.
 
         Args:
             circuit: The circuit to found its unique layers.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+            box_types: Can be either ``"gates"``, ``"measurements"`` or ``"all"``, corresponding to filter boxes with only gate layers, only measurement layers or all layers, respectively.
 
         Returns:
             Unique boxed layers of the given circuit.
@@ -583,7 +616,12 @@ class MitigationTask:
         unique_boxes: list[CircuitInstruction] = find_unique_box_instructions(
             instructions=instructions, normalize_annotations=None, undress_boxes=True
         )
-        return unique_boxes
+        box_types_filter = ["gates", "measurement"] if box_types == "all" else (box_types,)
+        return [
+            unique_box
+            for unique_box in unique_boxes
+            if self._find_box_type(unique_box) in box_types_filter
+        ]
 
     def prepare(
         self,
