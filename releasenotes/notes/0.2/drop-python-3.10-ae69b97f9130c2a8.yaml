@@ -1,0 +1,4 @@
+---
+deprecations:
+  - |
+    Support for Python 3.10 will be dropped in the next release since it reached its end-of-life.

@@ -32,7 +32,7 @@ This workflow tests the coverage environment on a single version of Python by in
 
 ## Documentation (`docs.yml`)
 
-This workflow ensures that the [Sphinx](https://www.sphinx-doc.org/) documentation builds successfully.  It also publishes the resulting build to [GitHub Pages](https://pages.github.com/) if it is from the appropriate branch (currently `stable/0.1`).
+This workflow ensures that the [Sphinx](https://www.sphinx-doc.org/) documentation builds successfully.  It also publishes the resulting build to [GitHub Pages](https://pages.github.com/) if it is from the appropriate branch (currently `stable/0.2`).
 
 ## Citation preview (`citation.yml`)
 
