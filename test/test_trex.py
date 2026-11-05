@@ -21,12 +21,34 @@ import numpy as np
 from qiskit.circuit import QuantumCircuit
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, QubitSparsePauli, SparsePauliOp
+from qiskit_mitigation import MitigationTask
 from qiskit_mitigation.trex import TREX
-from samplomatic.quantum_program import SamplexItem
+from samplomatic import build
+from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult, SamplexItem
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _measured_qubits(circuit: QuantumCircuit) -> list[int]:
+    """Return the sorted indices of the qubits that ``circuit`` measures."""
+    return sorted(
+        {
+            circuit.find_bit(instr.qubits[0]).index
+            for instr in circuit.data
+            if instr.operation.name.startswith("measure")
+        }
+    )
+
+
+def _calibration_item(
+    num_qubits: int, num_randomizations: int, meas_qubits: list[int] | None = None
+) -> SamplexItem:
+    """Build the calibration item of a boxed calibration circuit, as ``TREX.prepare`` does."""
+    boxed_circuit = TREX()._prepare_calibration_circuit(num_qubits, meas_qubits=meas_qubits)
+    template, samplex = build(boxed_circuit)
+    return SamplexItem(circuit=template, samplex=samplex, shape=(num_randomizations,))
 
 
 def _simple_circuit(num_qubits: int = 2) -> QuantumCircuit:
@@ -58,10 +80,11 @@ def _fake_trex_item_result(
     }
 
 
-def _mock_mitigation_task(num_qubits: int = 2) -> MagicMock:
+def _mock_mitigation_task(num_qubits: int = 2, meas_qubits: list[int] | None = None) -> MagicMock:
     """Return a MagicMock that looks like a MitigationTask with a circuit."""
     task = MagicMock()
     task.circuit = _simple_circuit(num_qubits)
+    task.meas_qubits = meas_qubits
     return task
 
 
@@ -99,56 +122,41 @@ class TestEditBoxingOptions(unittest.TestCase):
 
     def setUp(self):
         self.trex = TREX()
-        self.task = _mock_mitigation_task()
-
-    def test_task_appended_to_tasks(self):
-        """Calling ``_edit_boxing_options`` must append the task to ``self.tasks``."""
-        self.trex._edit_boxing_options(self.task, None)
-        self.assertIn(self.task, self.trex.tasks)
 
     def test_none_options_returns_defaults(self):
         """``None`` boxing_options must return default TREX options."""
-        result = self.trex._edit_boxing_options(self.task, None)
+        result = self.trex._edit_boxing_options(None)
         self.assertEqual(result, {"enable_measures": True, "measure_annotations": "all"})
 
     def test_missing_enable_measures_is_injected(self):
         """When ``enable_measures`` is absent, it is injected as ``True``."""
         options = {"some_key": "some_value"}
-        result = self.trex._edit_boxing_options(self.task, options)
+        result = self.trex._edit_boxing_options(options)
         self.assertTrue(result["enable_measures"])
 
     def test_missing_enable_measures_sets_measure_annotations_to_all(self):
         """When ``enable_measures`` is absent, ``measure_annotations`` is set to ``'all'``."""
         options = {}
-        result = self.trex._edit_boxing_options(self.task, options)
+        result = self.trex._edit_boxing_options(options)
         self.assertEqual(result["measure_annotations"], "all")
 
     def test_raises_when_enable_measures_is_false(self):
         """A ``False`` value for ``enable_measures`` must raise ``ValueError``."""
         with self.assertRaises(ValueError):
-            self.trex._edit_boxing_options(self.task, {"enable_measures": False})
+            self.trex._edit_boxing_options({"enable_measures": False})
 
     def test_measure_annotations_overridden_to_all(self):
         """Any non-``'all'`` value for ``measure_annotations`` is replaced with ``'all'``."""
         options = {"enable_measures": True, "measure_annotations": "change_basis"}
-        result = self.trex._edit_boxing_options(self.task, options)
+        result = self.trex._edit_boxing_options(options)
         self.assertEqual(result["measure_annotations"], "all")
 
     def test_valid_options_returned_unchanged(self):
         """Options already containing the correct values are returned as-is."""
         options = {"enable_measures": True, "measure_annotations": "all"}
-        result = self.trex._edit_boxing_options(self.task, options)
+        result = self.trex._edit_boxing_options(options)
         self.assertTrue(result["enable_measures"])
         self.assertEqual(result["measure_annotations"], "all")
-
-    def test_multiple_tasks_accumulated(self):
-        """Calling ``_edit_boxing_options`` multiple times appends all tasks."""
-        task2 = _mock_mitigation_task()
-        self.trex._edit_boxing_options(self.task, None)
-        self.trex._edit_boxing_options(task2, None)
-        self.assertEqual(len(self.trex.tasks), 2)
-        self.assertIn(self.task, self.trex.tasks)
-        self.assertIn(task2, self.trex.tasks)
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +186,7 @@ class TestHasCalibrationResult(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TREX._prepare_calibration_circuit  (static method)
+# TREX._prepare_calibration_circuit  (instance method)
 # ---------------------------------------------------------------------------
 
 
@@ -187,42 +195,68 @@ class TestPrepareCalibrationCircuit(unittest.TestCase):
 
     def test_returns_samplex_item(self):
         """Must return a ``SamplexItem``."""
-        circuits = [_simple_circuit(2)]
-        result = TREX._prepare_calibration_circuit(circuits, num_randomizations=10)
+        result = _calibration_item(2, num_randomizations=10)
         self.assertIsInstance(result, SamplexItem)
 
     def test_samplex_item_has_correct_shape(self):
         """The ``SamplexItem`` shape must equal ``(num_randomizations,)``."""
         num_randomizations = 7
-        circuits = [_simple_circuit(2)]
-        item = TREX._prepare_calibration_circuit(circuits, num_randomizations=num_randomizations)
+        item = _calibration_item(2, num_randomizations=num_randomizations)
         self.assertEqual(item.shape, (num_randomizations,))
 
     def test_calibration_circuit_is_quantum_circuit(self):
         """The ``SamplexItem.circuit`` must be a ``QuantumCircuit``."""
-        circuits = [_simple_circuit(2)]
-        item = TREX._prepare_calibration_circuit(circuits, num_randomizations=5)
+        item = _calibration_item(2, num_randomizations=5)
         self.assertIsInstance(item.circuit, QuantumCircuit)
 
     def test_calibration_circuit_has_meas_register(self):
         """The calibration circuit must include a classical register named ``'_meas'``."""
-        circuits = [_simple_circuit(2)]
-        item = TREX._prepare_calibration_circuit(circuits, num_randomizations=5)
+        item = _calibration_item(2, num_randomizations=5)
         reg_names = [r.name for r in item.circuit.cregs]
         self.assertIn("_meas", reg_names)
 
-    def test_num_qubits_is_max_of_input_circuits(self):
-        """Calibration circuit must span the largest qubit count across all input circuits."""
-        circuits = [_simple_circuit(2), _simple_circuit(4)]
-        item = TREX._prepare_calibration_circuit(circuits, num_randomizations=5)
+    def test_num_qubits_is_the_given_number(self):
+        """The calibration circuit and its ``_meas`` register span exactly the given qubits."""
+        item = _calibration_item(4, num_randomizations=5)
         self.assertEqual(item.circuit.num_qubits, 4)
+        (meas_reg,) = [r for r in item.circuit.cregs if r.name == "_meas"]
+        self.assertEqual(meas_reg.size, 4)
 
     def test_single_qubit_circuit(self):
-        """Single-qubit circuit must produce a valid 1-qubit calibration circuit."""
-        circuits = [QuantumCircuit(1)]
-        item = TREX._prepare_calibration_circuit(circuits, num_randomizations=3)
+        """A single qubit must produce a valid 1-qubit calibration circuit."""
+        item = _calibration_item(1, num_randomizations=3)
         self.assertIsInstance(item, SamplexItem)
         self.assertEqual(item.circuit.num_qubits, 1)
+
+    def test_all_qubits_are_measured_without_meas_qubits(self):
+        """Without ``meas_qubits`` every qubit of the calibration circuit is measured."""
+        item = _calibration_item(4, num_randomizations=5)
+        self.assertEqual(_measured_qubits(item.circuit), [0, 1, 2, 3])
+
+    def test_only_meas_qubits_are_measured(self):
+        """Only the given qubits are measured, each into the bit of its own index."""
+        item = _calibration_item(6, num_randomizations=5, meas_qubits=[0, 3, 5])
+        self.assertEqual(item.circuit.num_qubits, 6)
+        self.assertEqual(item.circuit.cregs[0].size, 6)
+        self.assertEqual(_measured_qubits(item.circuit), [0, 3, 5])
+        measures = [
+            instr for instr in item.circuit.data if instr.operation.name.startswith("measure")
+        ]
+        for instr in measures:
+            self.assertEqual(
+                item.circuit.find_bit(instr.qubits[0]).index,
+                item.circuit.find_bit(instr.clbits[0]).index,
+            )
+
+    def test_unmeasured_columns_of_the_sampled_flips_are_zero(self):
+        """Measurement flips are only drawn for the measured calibration columns."""
+        item = _calibration_item(6, num_randomizations=200, meas_qubits=[0, 3, 5])
+        flips = np.asarray(
+            item.samplex.sample({}, num_randomizations=200)["measurement_flips._meas"]
+        )
+        mean = flips.mean(axis=tuple(range(flips.ndim - 1)))
+        np.testing.assert_array_equal(mean[[1, 2, 4]], 0)
+        self.assertTrue(np.all(mean[[0, 3, 5]] > 0))
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +404,7 @@ class TestComputeNoiseModel(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TREX.calculate_trex_factor  (static method)
+# TREX.calculate_trex_factor  (instance method)
 # ---------------------------------------------------------------------------
 
 
@@ -393,6 +427,36 @@ class TestCalculateTrexFactor(unittest.TestCase):
         result = TREX.calculate_trex_factor(noise_model, "I")
 
         self.assertEqual(result, 1.0)
+
+    def test_narrower_noise_model_is_widened_when_it_covers_the_term(self):
+        """A model narrower than the observable is padded if the term acts only on calibrated qubits."""
+        error_prop = 0.1
+        error_rate = -0.5 * np.log(1.0 - 2.0 * error_prop)
+        noise_model = PauliLindbladMap.from_sparse_list([("X", [1], error_rate)], num_qubits=2)
+
+        # the observable has 4 qubits, the model 2; the terms act only on qubits 0 and 1
+        result = TREX.calculate_trex_factor(noise_model, "IIZI")  # acts on qubit 1
+        self.assertAlmostEqual(result, 1 / (1 - 2 * error_prop))
+        result = TREX.calculate_trex_factor(noise_model, "IIIZ")  # acts on qubit 0, noiseless
+        self.assertAlmostEqual(result, 1.0)
+        result = TREX.calculate_trex_factor(noise_model, "IIZZ")  # acts on qubits 0 and 1
+        self.assertAlmostEqual(result, 1 / (1 - 2 * error_prop))
+
+    def test_term_beyond_the_noise_model_raises(self):
+        """A term acting on an uncalibrated qubit must raise, not be treated as noiseless."""
+        noise_model = PauliLindbladMap.identity(2)
+        with self.assertRaisesRegex(ValueError, "acts on qubit 2, but the TREX calibration"):
+            TREX.calculate_trex_factor(noise_model, "ZII")
+
+    def test_term_beyond_the_calibration_array_raises(self):
+        """The array path raises with the same message as the model path."""
+        cal_data = np.zeros((2, 8, 2), dtype=bool)
+        with self.assertRaisesRegex(ValueError, "acts on qubit 2, but the TREX calibration"):
+            TREX.calculate_trex_factor(cal_data, "ZII")
+
+    def test_identity_term_never_raises_on_a_narrow_noise_model(self):
+        """An identity term acts on no qubit, so it needs no calibration."""
+        self.assertEqual(TREX.calculate_trex_factor(PauliLindbladMap.identity(1), "IIII"), 1.0)
 
     def test_numpy_array_input_all_zeros(self):
         """With all-zero calibration data array, ⟨Z⟩ = 1 → TREX factor = 1."""
@@ -478,7 +542,7 @@ class TestCalculateTrexFactor(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TREX.trex_factors_each_term  (static method)
+# TREX.trex_factors_each_term  (instance method)
 # ---------------------------------------------------------------------------
 
 
@@ -564,7 +628,7 @@ class TestTrexFactorsEachTerm(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TREX._add_data_to_passthrough_data  (static method)
+# TREX._add_data_to_passthrough_data  (instance method)
 # ---------------------------------------------------------------------------
 
 
@@ -733,6 +797,83 @@ class TestTREXBoxCircuit(unittest.TestCase):
         # No extra keys must have been added.
         self.assertEqual(set(options.keys()), {"enable_measures", "measure_annotations"})
 
+    # --- noise injection ---
+
+    def _forwarded_inject_noise_targets(self, options, **kwargs):
+        """Return the ``inject_noise_targets`` that ``_box_circuit`` forwards to the boxing pass."""
+        with patch("qiskit_mitigation.trex.generate_boxing_pass_manager") as mock_gen:
+            mock_gen.return_value = MagicMock()
+            mock_gen.return_value.run.return_value = MagicMock()
+            self.trex._box_circuit(self.circuit, options, **kwargs)
+        return mock_gen.call_args.kwargs["inject_noise_targets"]
+
+    def test_disable_measure_noise_injection_replaces_measure_targets_with_none(self):
+        """With ``disable_measure_noise_injection``, ``'all'`` and ``'measures'`` are forwarded as
+        ``'none'`` and the original dict is untouched."""
+        for targets in ("all", "measures"):
+            with self.subTest(inject_noise_targets=targets):
+                options = {"inject_noise_targets": targets}
+                forwarded = self._forwarded_inject_noise_targets(
+                    options, disable_measure_noise_injection=True
+                )
+                self.assertEqual(forwarded, "none")
+                self.assertEqual(options, {"inject_noise_targets": targets})
+
+    def test_disable_measure_noise_injection_keeps_other_targets(self):
+        """``'gates'`` and ``'none'`` do not affect the measurements and are forwarded as is."""
+        for targets in ("gates", "none"):
+            with self.subTest(inject_noise_targets=targets):
+                forwarded = self._forwarded_inject_noise_targets(
+                    {"inject_noise_targets": targets}, disable_measure_noise_injection=True
+                )
+                self.assertEqual(forwarded, targets)
+
+    def test_inject_noise_targets_is_forwarded_by_default(self):
+        """Without ``disable_measure_noise_injection`` all the targets are forwarded as is."""
+        for targets in ("all", "measures", "gates", "none"):
+            with self.subTest(inject_noise_targets=targets):
+                forwarded = self._forwarded_inject_noise_targets({"inject_noise_targets": targets})
+                self.assertEqual(forwarded, targets)
+
+    def test_prepare_with_inject_noise_targets_all_builds_the_calibration_item(self):
+        """``prepare`` must not require noise maps when ``inject_noise_targets`` is ``'all'``."""
+        task = MitigationTask()
+        task.circuit = _simple_circuit()
+        task.meas_qubits = None
+        self.trex.tasks.append(task)
+        quantum_program = self.trex.prepare(
+            1, QuantumProgram(shots=1), custom_boxing_options={"inject_noise_targets": "all"}
+        )
+        self.assertEqual(len(quantum_program.items), 1)
+        for instruction in self.trex.boxed_circuit:
+            self.assertFalse(
+                any(type(a).__name__ == "InjectNoise" for a in instruction.operation.annotations)
+            )
+
+    def test_prepare_calibration_circuit_keeps_noise_injection_by_default(self):
+        """Called directly, ``_prepare_calibration_circuit`` keeps the user's noise injection so
+        the layers match the boxes the user asked for, and does not build a samplex."""
+        options = {"inject_noise_targets": "all"}
+        boxed = TREX()._prepare_calibration_circuit(2, options)
+        self.assertIsInstance(boxed, QuantumCircuit)
+        self.assertTrue(
+            any(
+                type(a).__name__ == "InjectNoise"
+                for instruction in boxed
+                for a in instruction.operation.annotations
+            )
+        )
+        disabled = TREX()._prepare_calibration_circuit(
+            2, options, disable_measure_noise_injection=True
+        )
+        self.assertFalse(
+            any(
+                type(a).__name__ == "InjectNoise"
+                for instruction in disabled
+                for a in instruction.operation.annotations
+            )
+        )
+
 
 # ---------------------------------------------------------------------------
 # TREX.create_instance_from_passthrough_data
@@ -789,6 +930,182 @@ class TestTREXCreateInstanceFromPassthroughData(unittest.TestCase):
         passthrough = self._minimal_passthrough(mitigation=None)
         with self.assertRaises(ValueError):
             TREX.create_instance_from_passthrough_data(passthrough)
+
+
+# ---------------------------------------------------------------------------
+# TREX shared by tasks that trim their measurements
+# ---------------------------------------------------------------------------
+
+
+def _x_on(num_qubits: int, *qubits: int) -> QuantumCircuit:
+    """Return a circuit with an X gate on each of ``qubits``."""
+    circuit = QuantumCircuit(num_qubits)
+    for qubit in qubits:
+        circuit.x(qubit)
+    return circuit
+
+
+def _calibration(num_qubits: int, flip_rates: dict[int, float], randomizations=4, shots=100):
+    """Return a fake calibration item result in which qubit ``i`` flips with ``flip_rates[i]``."""
+    data = np.zeros((randomizations, shots, num_qubits), dtype=bool)
+    for qubit, rate in flip_rates.items():
+        data[:, : round(rate * shots), qubit] = True
+    return {"_meas": data, "measurement_flips._meas": np.zeros_like(data)}
+
+
+SHOTS = 8
+
+
+class TestTrexSharedByTrimmedTasks(unittest.TestCase):
+    """The calibration measures the union of the qubits measured by all the tasks."""
+
+    @staticmethod
+    def _calibration_circuit(*tasks_args):
+        """Prepare one task per ``(circuit, observable, trim)`` with one TREX; return the item circuit."""
+        trex = TREX()
+        program = None
+        for circuit, observable, trim in tasks_args:
+            program = MitigationTask().prepare(
+                circuit,
+                [SparsePauliOp(observable)],
+                None,
+                trex=trex,
+                quantum_program=program,
+                shots_per_randomization=SHOTS,
+                num_randomizations=2,
+                trim_measurements=trim,
+            )
+        trex.prepare(2, program)
+        return program.items[-1].circuit
+
+    def _cal(self, *tasks_args):
+        """Return ``(width of the _meas register, measured qubits)`` of the calibration."""
+        circuit = self._calibration_circuit(*tasks_args)
+        return circuit.cregs[0].size, _measured_qubits(circuit)
+
+    def test_calibration_measures_the_union_of_the_measured_qubits(self):
+        low = (_x_on(6, 0, 1), "IIIIZZ", True)  # measures qubits 0, 1
+        high = (_x_on(6, 3), "IIZIII", True)  # measures qubit 3
+        self.assertEqual(self._cal(low), (2, [0, 1]))
+        self.assertEqual(self._cal(high), (4, [3]))
+        # qubit 2 is idle in both tasks, so it is not measured
+        self.assertEqual(self._cal(low, high), (4, [0, 1, 3]))
+
+    def test_union_of_overlapping_tasks_has_no_duplicates(self):
+        first = (_x_on(6, 0, 2), "IIIZIZ", True)  # measures qubits 0, 2
+        second = (_x_on(6, 2, 5), "ZIZIII", True)  # measures qubits 2, 3, 5
+        self.assertEqual(self._cal(first, second), (6, [0, 2, 3, 5]))
+
+    def test_tasks_that_do_not_trim_measure_their_whole_circuit(self):
+        trimmed = (_x_on(6, 0), "IIIIIZ", True)
+        untrimmed = (_x_on(3, 0), "IIZ", False)
+        self.assertEqual(self._cal(trimmed, untrimmed), (3, [0, 1, 2]))
+        untrimmed_wide = (_x_on(6, 0), "IIIIIZ", False)
+        narrow = (_x_on(3, 0), "IIZ", True)
+        self.assertEqual(self._cal(narrow, untrimmed_wide), (6, [0, 1, 2, 3, 4, 5]))
+
+    def test_trimmed_and_untrimmed_tasks_are_united(self):
+        trimmed = (_x_on(8, 7), "ZIIIIIII", True)  # measures qubit 7
+        untrimmed = (_x_on(3, 0), "IIZ", False)  # measures qubits 0, 1, 2
+        self.assertEqual(self._cal(trimmed, untrimmed), (8, [0, 1, 2, 7]))
+
+    def test_idle_qubits_below_the_highest_measured_qubit_are_not_measured(self):
+        """The register spans ``0..max`` so columns equal qubit indices, but gaps stay unmeasured."""
+        circuit = self._calibration_circuit(
+            (_x_on(6, 0), "IIIIIZ", True), (_x_on(6, 4), "IZIIII", True)
+        )
+        self.assertEqual(_measured_qubits(circuit), [0, 4])
+        self.assertEqual(circuit.cregs[0].size, 5)
+
+    def test_tasks_with_different_support_use_their_own_calibration_columns(self):
+        """Column ``i`` of the calibration is circuit qubit ``i`` for every task."""
+        trex = TREX()
+        low = MitigationTask()
+        program = low.prepare(
+            _x_on(3, 0, 1), [SparsePauliOp("IZZ")], None, trex=trex,
+            shots_per_randomization=SHOTS, num_randomizations=1, trim_measurements=True,
+        )  # fmt: skip
+        high = MitigationTask()
+        program = high.prepare(
+            _x_on(5, 4), [SparsePauliOp("ZIIII")], None, trex=trex,
+            quantum_program=program, shots_per_randomization=SHOTS, num_randomizations=1,
+            trim_measurements=True,
+        )  # fmt: skip
+        self.assertEqual(low.meas_qubits, [0, 1])
+        self.assertEqual(high.meas_qubits, [4])
+        trex.prepare(1, program)
+        # qubit 1 flips in 20% of the shots, qubit 4 in 10%, the rest never
+        results = QuantumProgramResult(
+            [
+                {"_meas": np.ones((1, 1, SHOTS, 2), dtype=bool)},  # qubits 0 and 1, both |1>
+                {"_meas": np.ones((1, 1, SHOTS, 1), dtype=bool)},  # qubit 4, |1>
+                _calibration(5, {1: 0.2, 4: 0.1}),
+            ]
+        )
+        # The learned flip rate p damps a Z term by exp(-2p). ZZ on qubits 0 and 1 is damped by the
+        # rate of qubit 1 only, Z on qubit 4 by its own rate.
+        np.testing.assert_allclose(low.postprocess(results).data.evs, [np.exp(0.4)], atol=1e-9)
+        np.testing.assert_allclose(high.postprocess(results).data.evs, [-np.exp(0.2)], atol=1e-9)
+
+    def test_noise_model_narrower_than_the_circuit_is_widened(self):
+        """The calibration register ends at the highest qubit measured by the single task."""
+        task = MitigationTask()
+        task.prepare(
+            _x_on(5, 0, 1), [SparsePauliOp("IIIZZ")], None, trex=TREX(),
+            shots_per_randomization=SHOTS, num_randomizations=1, trim_measurements=True,
+        )  # fmt: skip
+        data = np.ones((1, 1, SHOTS, 2), dtype=bool)
+        noise_model = PauliLindbladMap.from_sparse_list([("X", [1], 0.2)], num_qubits=2)
+        evs = task.postprocess({"_meas": data}, measure_noise_data=noise_model).data.evs
+        # a Pauli-Lindblad rate of 0.2 on X damps Z by exp(-2 * 0.2)
+        np.testing.assert_allclose(evs, [np.exp(0.4)], atol=1e-9)
+
+    def test_calibration_prepared_too_early_fails_loudly_on_both_paths(self):
+        """A calibration prepared before the last task was added does not cover its qubits."""
+        trex = TREX()
+        low, high = MitigationTask(), MitigationTask()
+        program = low.prepare(
+            _x_on(6, 0), [SparsePauliOp("IIIIIZ")], None, trex=trex,
+            shots_per_randomization=SHOTS, num_randomizations=1, trim_measurements=True,
+        )  # fmt: skip
+        trex.prepare(1, program)  # too early: ``high`` is not registered yet
+        self.assertEqual(program.items[-1].circuit.cregs[0].size, 1)
+        high.prepare(
+            _x_on(6, 4), [SparsePauliOp("IZIIII")], None, trex=trex, quantum_program=program,
+            shots_per_randomization=SHOTS, num_randomizations=1, trim_measurements=True,
+        )  # fmt: skip
+        data = {"_meas": np.ones((1, 1, SHOTS, 1), dtype=bool)}
+        model = PauliLindbladMap.from_sparse_list([("X", [0], 0.3)], num_qubits=1)
+        with self.assertRaisesRegex(ValueError, "acts on qubit 4"):
+            high.postprocess(data, measure_noise_data=model)
+        with self.assertRaisesRegex(ValueError, "acts on qubit 4"):
+            high.postprocess(data, measure_noise_data=np.zeros((1, 100, 1), dtype=bool))
+
+    def test_calibration_array_with_too_few_qubits_raises(self):
+        task = MitigationTask()
+        task.prepare(
+            _x_on(5, 4), [SparsePauliOp("ZIIII")], None,
+            shots_per_randomization=SHOTS, num_randomizations=1, trim_measurements=True,
+        )  # fmt: skip
+        too_narrow = np.zeros((1, SHOTS, 2), dtype=bool)
+        with self.assertRaisesRegex(ValueError, "calibration data has only 2 qubits"):
+            task.postprocess(
+                {"_meas": np.ones((1, 1, SHOTS, 1), dtype=bool)}, measure_noise_data=too_narrow
+            )
+
+    def test_calibration_array_path_uses_the_column_of_the_circuit_qubit(self):
+        task = MitigationTask()
+        task.prepare(
+            _x_on(5, 1), [SparsePauliOp("IIIZI")], None,
+            shots_per_randomization=SHOTS, num_randomizations=1, trim_measurements=True,
+        )  # fmt: skip
+        data = {"_meas": np.ones((1, 1, SHOTS, 1), dtype=bool)}
+        cal = _calibration(4, {1: 0.25})["_meas"]
+        evs = task.postprocess(data, measure_noise_data=cal).data.evs
+        np.testing.assert_allclose(evs, [-1 / 0.5], atol=1e-9)
+
+    def test_trex_version_is_unchanged(self):
+        self.assertEqual(TREX().VERSION, "0.1")
 
 
 if __name__ == "__main__":

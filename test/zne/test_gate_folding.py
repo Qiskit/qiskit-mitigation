@@ -28,6 +28,8 @@ from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.zne.gate_folding import GateFolding
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult
 
+from ..trim_helpers import TrimMeasurementsTestsMixin
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -806,10 +808,10 @@ class TestGateFoldingPostprocess(unittest.TestCase):
         gf = self._make_minimal_gate_folding()
         with patch.dict(
             "qiskit_mitigation.zne.gate_folding.VERSION_TO_POSTPROCESSOR",
-            {"0.1": MagicMock(return_value=None)},
+            {"0.2": MagicMock(return_value=None)},
         ) as mock_dict:
             gf.postprocess(MagicMock())
-            mock_fn = mock_dict["0.1"]
+            mock_fn = mock_dict["0.2"]
             _, call_kwargs = mock_fn.call_args
             np.testing.assert_array_equal(call_kwargs["noise_factors"], list(gf.noise_factors))
 
@@ -818,10 +820,10 @@ class TestGateFoldingPostprocess(unittest.TestCase):
         gf = self._make_minimal_gate_folding()
         with patch.dict(
             "qiskit_mitigation.zne.gate_folding.VERSION_TO_POSTPROCESSOR",
-            {"0.1": MagicMock(return_value=None)},
+            {"0.2": MagicMock(return_value=None)},
         ) as mock_dict:
             gf.postprocess(MagicMock())
-            mock_fn = mock_dict["0.1"]
+            mock_fn = mock_dict["0.2"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolator"], list(gf.extrapolator))
 
@@ -831,10 +833,10 @@ class TestGateFoldingPostprocess(unittest.TestCase):
         override = [1.0, 7.0, 9.0]
         with patch.dict(
             "qiskit_mitigation.zne.gate_folding.VERSION_TO_POSTPROCESSOR",
-            {"0.1": MagicMock(return_value=None)},
+            {"0.2": MagicMock(return_value=None)},
         ) as mock_dict:
             gf.postprocess(MagicMock(), noise_factors=override)
-            mock_fn = mock_dict["0.1"]
+            mock_fn = mock_dict["0.2"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["noise_factors"], override)
 
@@ -844,10 +846,10 @@ class TestGateFoldingPostprocess(unittest.TestCase):
         override = ["fallback"]
         with patch.dict(
             "qiskit_mitigation.zne.gate_folding.VERSION_TO_POSTPROCESSOR",
-            {"0.1": MagicMock(return_value=None)},
+            {"0.2": MagicMock(return_value=None)},
         ) as mock_dict:
             gf.postprocess(MagicMock(), extrapolator=override)
-            mock_fn = mock_dict["0.1"]
+            mock_fn = mock_dict["0.2"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolator"], override)
 
@@ -857,10 +859,10 @@ class TestGateFoldingPostprocess(unittest.TestCase):
         override = [0.0, 1.0]
         with patch.dict(
             "qiskit_mitigation.zne.gate_folding.VERSION_TO_POSTPROCESSOR",
-            {"0.1": MagicMock(return_value=None)},
+            {"0.2": MagicMock(return_value=None)},
         ) as mock_dict:
             gf.postprocess(MagicMock(), extrapolated_noise_factors=override)
-            mock_fn = mock_dict["0.1"]
+            mock_fn = mock_dict["0.2"]
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(call_kwargs["extrapolated_noise_factors"], override)
 
@@ -1082,6 +1084,17 @@ class TestGateFoldingCreateInstanceFromPassthroughData(unittest.TestCase):
         passthrough = self._minimal_passthrough(trex_calibration=True)
         with self.assertRaises(ValueError):
             GateFolding.create_instance_from_passthrough_data(passthrough, trex=None)
+
+
+# ---------------------------------------------------------------------------
+# GateFolding  -  trim_measurements
+# ---------------------------------------------------------------------------
+
+
+class TestGateFoldingTrimMeasurements(TrimMeasurementsTestsMixin, unittest.TestCase):
+    """Tests for ``trim_measurements`` in :meth:`GateFolding.prepare`."""
+
+    task_cls = GateFolding
 
 
 if __name__ == "__main__":

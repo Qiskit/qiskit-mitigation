@@ -33,6 +33,8 @@ from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
 from samplomatic.utils import get_annotation
 
+from .trim_helpers import LearnedLayersTestsMixin, TrimMeasurementsTestsMixin
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -547,6 +549,30 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
             meas_bases=[Pauli("ZZ")],
         )
         self.assertIsInstance(result, PubResult)
+
+    def test_non_broadcast_measurement_flips_applied_exactly_once(self):
+        """Flipping one qubit of all-zero data turns the ``ZZ`` expectation value into ``-1``."""
+        data = np.zeros((2, 1, 4, 2), dtype=bool)
+        flips = np.zeros_like(data)
+        flips[..., 0] = True
+        for meas_qubits, num_qubits in [(None, None), ([0, 2], 3)]:
+            with self.subTest(meas_qubits=meas_qubits):
+                label = "ZZ" if meas_qubits is None else "ZIZ"
+                item_result = {
+                    "_meas": data.copy(),
+                    "pauli_signs": np.zeros((2, 1, 1), dtype=bool),
+                    "measurement_flips._meas": flips,
+                }
+                result = PEC.compute_expectation_value_pec(
+                    item_result,
+                    observables=ObservablesArray([SparsePauliOp(label)]),
+                    gamma=1.0,
+                    broadcast_obs_and_params=False,
+                    meas_bases=[Pauli(label)],
+                    meas_qubits=meas_qubits,
+                    circuit_num_qubits=num_qubits,
+                )
+                np.testing.assert_allclose(result.data.evs, -1.0)
 
     def test_non_broadcast_list_observable_skips_conversion(self):
         """Passing a list of ``SparsePauliOp`` in non-broadcast mode must skip the
@@ -1107,6 +1133,23 @@ class TestPECCreateInstanceFromPassthroughData(unittest.TestCase):
         passthrough = self._minimal_passthrough(trex_calibration=True)
         with self.assertRaises(ValueError):
             PEC.create_instance_from_passthrough_data(passthrough, trex=None)
+
+
+# ---------------------------------------------------------------------------
+# PEC  -  trim_measurements
+# ---------------------------------------------------------------------------
+
+
+class TestPECTrimMeasurements(TrimMeasurementsTestsMixin, unittest.TestCase):
+    """Tests for ``trim_measurements`` in :meth:`PEC.prepare`."""
+
+    task_cls = PEC
+
+
+class TestPECLearnedLayersMatch(LearnedLayersTestsMixin, unittest.TestCase):
+    """Noise learned for a different trimming is not found by :meth:`PEC.prepare`."""
+
+    task_cls = PEC
 
 
 # ---------------------------------------------------------------------------
