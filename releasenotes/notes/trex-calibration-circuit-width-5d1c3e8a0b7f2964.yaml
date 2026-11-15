@@ -1,0 +1,10 @@
+---
+fixes:
+  - |
+    Fixed the TREX calibration circuit built by :meth:`.TREX.prepare` and by
+    :func:`.find_combined_unique_layers` with ``trex=True`` having only as many qubits as the
+    highest measured qubit plus one. Its measurement layer then acted on a smaller register than
+    the circuits it calibrates, so noise learning rejected it for any layout that does not measure
+    the last qubit of the backend. The calibration circuit again has the width of the widest
+    calibrated circuit, while its ``_meas`` register still ends at the highest measured qubit.
+    See `#65 <https://github.com/Qiskit/qiskit-mitigation/issues/65>`__.
