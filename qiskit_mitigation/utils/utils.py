@@ -229,9 +229,10 @@ def find_combined_unique_layers(
         # Add the calibration layer, created exactly as ``TREX.prepare`` creates it. Its
         # annotations differ from those of the measurement boxes of the circuits, so both are kept.
         cal_qubits = TREX._calibration_qubits(circuits, meas_qubits_list)
+        max_num_qubits = max(circuit.num_qubits for circuit in circuits)
         instructions.extend(
             TREX()._prepare_calibration_circuit(
-                max(cal_qubits) + 1,
+                max_num_qubits,
                 trex_custom_boxing_options,
                 cal_qubits,
                 disable_measure_noise_injection=True,

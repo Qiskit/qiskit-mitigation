@@ -1,0 +1,5 @@
+---
+fixes:
+  - |
+    Changed the classical register size in TREX calibration circuit to the size of the largest circuit mitigated with the TREX instance.
+    This fixes an issue that was raised when learning noise using NoiseLearnerV3.
