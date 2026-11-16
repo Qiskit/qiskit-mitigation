@@ -1017,6 +1017,17 @@ class TestTrexSharedByTrimmedTasks(unittest.TestCase):
         self.assertEqual(_measured_qubits(circuit), [0, 4])
         self.assertEqual(circuit.cregs[0].size, 5)
 
+    def test_calibration_circuit_has_the_qubits_of_the_widest_task_circuit(self):
+        """The calibration acts on the qubits of the task circuits even when they are wider than
+        the highest measured qubit, while ``_meas`` still ends at that qubit (issue #65)."""
+        narrow = (_x_on(3, 0), "IIZ", True)  # measures qubit 0
+        wide = (_x_on(6, 1), "IIIIZI", True)  # measures qubit 1
+        circuit = self._calibration_circuit(narrow, wide)
+        self.assertEqual(circuit.num_qubits, 6)
+        self.assertEqual(set(circuit.qubits), set(wide[0].qubits))
+        self.assertEqual(circuit.cregs[0].size, 2)
+        self.assertEqual(_measured_qubits(circuit), [0, 1])
+
     def test_tasks_with_different_support_use_their_own_calibration_columns(self):
         """Column ``i`` of the calibration is circuit qubit ``i`` for every task."""
         trex = TREX()

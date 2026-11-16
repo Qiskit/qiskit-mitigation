@@ -231,7 +231,7 @@ def find_combined_unique_layers(
         cal_qubits = TREX._calibration_qubits(circuits, meas_qubits_list)
         instructions.extend(
             TREX()._prepare_calibration_circuit(
-                max(cal_qubits) + 1,
+                max(circuit.num_qubits for circuit in circuits),
                 trex_custom_boxing_options,
                 cal_qubits,
                 disable_measure_noise_injection=True,
