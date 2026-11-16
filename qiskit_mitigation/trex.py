@@ -139,11 +139,12 @@ class TREX:
             raise ValueError(
                 "A TREX must be connected to at least one mitigation task to create a calibration task."
             )
-        cal_qubits = self._calibration_qubits(
-            [task.circuit for task in self.tasks], [task.meas_qubits for task in self.tasks]
-        )
+        circuits = [task.circuit for task in self.tasks]
+        cal_qubits = self._calibration_qubits(circuits, [task.meas_qubits for task in self.tasks])
+
+        max_num_qubits = max(circuit.num_qubits for circuit in circuits)
         boxed_circuit = self._prepare_calibration_circuit(
-            max(cal_qubits) + 1,
+            max_num_qubits,
             custom_boxing_options,
             cal_qubits,
             disable_measure_noise_injection=True,
@@ -274,8 +275,8 @@ class TREX:
     ) -> QuantumCircuit:
         """Creates a boxed TREX calibration circuit.
 
-        The calibration circuit has ``num_qubits`` qubits and a ``_meas`` register of the same
-        size, in which qubit ``i`` is measured into bit ``i``. The boxed calibration circuit is
+        The calibration circuit has ``num_qubits`` qubits and a ``_meas`` register with a size of
+        ``max(meas_qubits) + 1``, in which qubit ``i`` is measured into bit ``i``. The boxed calibration circuit is
         saved in ``self.boxed_circuit``.
 
         Args:
@@ -289,7 +290,8 @@ class TREX:
         Returns:
             The boxed calibration circuit for TREX factors calculation.
         """
-        classical_cal_reg = ClassicalRegister(num_qubits, name="_meas")
+        num_bits = num_qubits if meas_qubits is None else max(meas_qubits) + 1
+        classical_cal_reg = ClassicalRegister(num_bits, name="_meas")
         trex_circuit = QuantumCircuit(num_qubits)
         trex_circuit.add_register(classical_cal_reg)
         if meas_qubits is None:
