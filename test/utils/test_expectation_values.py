@@ -2001,6 +2001,17 @@ class TestComputeExpVal(unittest.TestCase):
         ev, _, _ = _compute_single_term_exp_val_with_twirl_variance("Z", data, signs=signs)
         np.testing.assert_allclose(ev, 1.0, atol=1e-10)
 
+    def test_postselect_mask_all_false_zero_shots(self):
+        """When postselect_mask has no True values, total_shots is 0 and it should return NaNs."""
+        data = np.zeros((2, 4, 1), dtype=bool)
+        postselect_mask = np.zeros((2, 4), dtype=bool)
+        ev, ens_var, twirl_var = _compute_single_term_exp_val_with_twirl_variance(
+            "Z", data, postselect_mask=postselect_mask
+        )
+        self.assertTrue(np.isnan(ev))
+        self.assertTrue(np.isnan(ens_var))
+        self.assertTrue(np.isnan(twirl_var))
+
 
 class TestExecutorExpectationValuesRescaleFactors(unittest.TestCase):
     """Regression tests for the ``rescale_factors`` path of ``executor_expectation_values``.

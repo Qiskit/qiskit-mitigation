@@ -567,6 +567,28 @@ class TestPEAPostprocess(unittest.TestCase):
             _, call_kwargs = mock_fn.call_args
             self.assertEqual(list(call_kwargs["extrapolated_noise_factors"]), saved)
 
+    def test_postprocess_with_postselect_mask_function(self):
+        """``PEA.postprocess`` forwards ``postselect_mask_function``."""
+        pea = PEA()
+        pea.noise_factors = np.array(NOISE_FACTORS)
+        pea.extrapolator = ["linear"]
+        pea.observables = _obs("Z")
+        pea.parameters = None
+        pea.param_shape = (1,)
+        pea.param_basis_pairs = [((0,), "Z")]
+        pea.meas_bases = None
+        pea.broadcast_obs_and_params = True
+
+        # Shape: (noise_factors, num_randomizations, num_configs, shots, num_bits) = (3, 1, 1, 4, 1)
+        data = np.array([[[[[False], [True], [False], [True]]]]] * len(NOISE_FACTORS), dtype=bool)
+        item_result = {"_meas": data}
+
+        def mask_fn(_res):
+            return np.array([[[[True, False, True, False]]]] * len(NOISE_FACTORS))
+
+        pub_result = pea.postprocess(item_result, postselect_mask_function=mask_fn)
+        np.testing.assert_allclose(pub_result.data.evs, [1.0])
+
     def test_postprocess_unsupported_version_raises(self):
         """``postprocess`` must raise ValueError when task VERSION is unsupported."""
         pea = PEA()
@@ -622,6 +644,18 @@ class TestComputeExpectationValuePea(unittest.TestCase):
             self._item_result() if item_result is None else item_result,
             **params,
         )
+
+    def test_compute_expectation_value_with_postselect_mask_function(self):
+        """``compute_expectation_value_pea`` with ``postselect_mask_function``."""
+        # shape: (noise_factors, 1, 1, 4, 1)
+        data = np.array([[[[[False], [True], [False], [True]]]]] * len(NOISE_FACTORS), dtype=bool)
+        item_result = {"_meas": data}
+
+        def mask_fn(_res):
+            return np.array([[[[True, False, True, False]]]] * len(NOISE_FACTORS))
+
+        pub_result = self._compute(item_result=item_result, postselect_mask_function=mask_fn)
+        np.testing.assert_allclose(pub_result.data.evs, [1.0])
 
     # ------------------------------------------------------------------
     # Input-validation errors

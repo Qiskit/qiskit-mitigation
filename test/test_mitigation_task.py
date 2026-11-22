@@ -35,6 +35,7 @@ from qiskit.quantum_info import Pauli, PauliList, SparsePauliOp
 from qiskit.transpiler import PassManager
 from qiskit_mitigation.mitigation_task import MitigationTask
 from qiskit_mitigation.postselection.passes import AddPostCircuitNonMarkovianErrorChecks
+from qiskit_mitigation.postselection.post_selector import PostSelector
 from qiskit_mitigation.trex import TREX
 from samplomatic import build
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult
@@ -535,6 +536,84 @@ class TestComputeExpectationValue(unittest.TestCase):
                 )
                 np.testing.assert_allclose(pub_result.data.evs, -1.0)
 
+    def test_non_broadcast_postselect_mask_function(self):
+        """``postselect_mask_function`` filters shots in non-broadcast mode."""
+        # 4 shots: shots 0 & 2 are |0> (ev +1 for Z), shots 1 & 3 are |1> (ev -1 for Z)
+        data = np.array([[[[False], [True], [False], [True]]]], dtype=bool)  # shape (1, 1, 4, 1)
+        result = {"_meas": data}
+
+        # Keep only shots 0 and 2 (|0> shots)
+        def mask_fn_zeros(_res):
+            return np.array([[[True, False, True, False]]])
+
+        pub_result_zeros = MitigationTask.compute_expectation_value(
+            result,
+            self._obs("Z"),
+            broadcast_obs_and_params=False,
+            meas_bases=[Pauli("Z")],
+            postselect_mask_function=mask_fn_zeros,
+        )
+        np.testing.assert_allclose(pub_result_zeros.data.evs, 1.0)
+
+        # Keep only shots 1 and 3 (|1> shots)
+        def mask_fn_ones(_res):
+            return np.array([[[False, True, False, True]]])
+
+        pub_result_ones = MitigationTask.compute_expectation_value(
+            result,
+            self._obs("Z"),
+            broadcast_obs_and_params=False,
+            meas_bases=[Pauli("Z")],
+            postselect_mask_function=mask_fn_ones,
+        )
+        np.testing.assert_allclose(pub_result_ones.data.evs, -1.0)
+
+    def test_broadcast_postselect_mask_function(self):
+        """``postselect_mask_function`` filters shots in broadcast mode."""
+        # shape (1, 1, 4, 1): 1 rand, 1 config, 4 shots, 1 bit
+        data = np.array([[[[False], [True], [False], [True]]]], dtype=bool)
+        result = {"_meas": data}
+
+        def mask_fn(_res):
+            return np.array([[[True, False, True, False]]])
+
+        pub_result = MitigationTask.compute_expectation_value(
+            result,
+            self._obs("Z"),
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "Z")],
+            broadcast_obs_and_params=True,
+            postselect_mask_function=mask_fn,
+        )
+        np.testing.assert_allclose(pub_result.data.evs, [1.0])
+
+    def test_compute_expectation_value_with_post_selector(self):
+        """``PostSelector.compute_mask`` can be used as ``postselect_mask_function``."""
+        qc = QuantumCircuit(1)
+        creg = ClassicalRegister(1, "_meas")
+        qc.add_register(creg)
+        qc.measure(0, 0)
+        pm = PassManager([AddPostCircuitNonMarkovianErrorChecks()])
+        transpiled_qc = pm.run(qc)
+        selector = PostSelector.from_circuit(transpiled_qc, coupling_map=[])
+
+        # 4 shots for _meas: shots 0, 2 are 0 (|0>); shots 1, 3 are 1 (|1>)
+        # Post-check passes when _meas != _meas_ps (an X pulse was applied between measurements).
+        # Setting _meas_ps = all True means shots 0, 2 pass (False != True) and shots 1, 3 fail (True != True).
+        data_meas = np.array([[[[False], [True], [False], [True]]]], dtype=bool)
+        data_ps = np.array([[[[True], [True], [True], [True]]]], dtype=bool)
+        result = {"_meas": data_meas, "_meas_ps": data_ps}
+
+        pub_result = MitigationTask.compute_expectation_value(
+            result,
+            self._obs("Z"),
+            broadcast_obs_and_params=False,
+            meas_bases=[Pauli("Z")],
+            postselect_mask_function=selector.compute_mask,
+        )
+        # Shots 1 and 3 are discarded by node postselection, so only shots 0 and 2 (|0>) remain -> evs = 1.0
+        np.testing.assert_allclose(pub_result.data.evs, 1.0)
+
 
 # ---------------------------------------------------------------------------
 # MitigationTask._process_broadcasted_expectation_values  (static method)
@@ -617,6 +696,23 @@ class TestProcessBroadcastedExpectationValues(unittest.TestCase):
                 param_shape=(2,),
                 param_basis_pairs=[((0,), "ZZ")],  # only (0,) — (1,) is missing
             )
+
+    def test_process_broadcasted_with_postselect_mask(self):
+        """``_process_broadcasted_expectation_values`` with postselect_mask."""
+        obs = ObservablesArray([SparsePauliOp("Z")])
+        # 4 shots: 2 zeros, 2 ones
+        data = np.array([[[[False], [True], [False], [True]]]], dtype=bool)  # shape (1, 1, 4, 1)
+        mask = np.array([[[True, False, True, False]]])  # keep only zeros
+
+        exp_vals, stds, ens_stds = MitigationTask._process_broadcasted_expectation_values(
+            data,
+            obs,
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "Z")],
+            postselect_mask=mask,
+        )
+        np.testing.assert_allclose(exp_vals, [1.0])
+        np.testing.assert_allclose(stds, ens_stds)
 
 
 class TestUnbroadcastIndex(unittest.TestCase):
@@ -1291,6 +1387,36 @@ class TestMitigationTaskPostprocess(unittest.TestCase):
         item_result = {"_meas": np.zeros((2, 1, 4, 2), dtype=bool)}
         pub_result = task.postprocess(item_result)
         self.assertIsInstance(pub_result, PubResult)
+
+    def test_postprocess_with_postselect_mask_function(self):
+        """``postprocess`` forwards ``postselect_mask_function`` properly."""
+        task = self._prepared_task()
+        # 4 shots: 2 zeros (|00>), 2 ones (|01> where bit 0 is True -> ZZ eigenvalue is -1)
+        data = np.array(
+            [
+                [
+                    [
+                        [False, False],
+                        [True, False],
+                        [False, False],
+                        [True, False],
+                    ]
+                ]
+            ],
+            dtype=bool,
+        )
+        item_result = {"_meas": data}
+
+        # Without mask function, evs is 0.0 (half +1, half -1)
+        res_no_mask = task.postprocess(item_result)
+        np.testing.assert_allclose(res_no_mask.data.evs, [0.0])
+
+        # With mask function keeping only |00> shots (indices 0 and 2)
+        def mask_fn(_res):
+            return np.array([[[True, False, True, False]]])
+
+        res_masked = task.postprocess(item_result, postselect_mask_function=mask_fn)
+        np.testing.assert_allclose(res_masked.data.evs, [1.0])
 
     def test_postprocess_unsupported_version_raises(self):
         """``postprocess`` must raise ValueError when task VERSION is unsupported."""

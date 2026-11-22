@@ -17,7 +17,7 @@ from __future__ import annotations
 import copy
 import warnings
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import lru_cache
 from typing import Any, Literal, cast
 
@@ -909,6 +909,7 @@ class MitigationTask:
         self,
         results: QuantumProgramItemResult | QuantumProgramResult,
         measure_noise_data: PauliLindbladMap | np.ndarray | None = None,
+        postselect_mask_function: Callable[[QuantumProgramItemResult], np.ndarray] | None = None,
     ) -> PubResult:
         """Process expectation values for a single item result.
 
@@ -917,6 +918,8 @@ class MitigationTask:
                 If TREX calibration task is added to the quantum program, its results will be used to compute the measure noise data if the entire results object is provided.
             measure_noise_data: The learned measurement noise data to use for TREX mitigation.
                 If `None` and a calibration task is present the quantum program, the measure noise will be computed from the calibration task results if the entire results object is provided.
+            postselect_mask_function: A function that computes a postselection mask from the item result,
+                used to filter shots from the result. For example, :meth:`.PostSelector.compute_mask`.
 
         Returns:
             A PubResult which contains ``evs`` and ``std`` as fields in its data, where ``evs`` are expectation values,
@@ -947,6 +950,7 @@ class MitigationTask:
             measure_noise_data=measure_noise_data,
             meas_qubits=self.meas_qubits,
             circuit_num_qubits=self.circuit_num_qubits,
+            postselect_mask_function=postselect_mask_function,
         )
 
     @staticmethod
@@ -956,6 +960,7 @@ class MitigationTask:
         param_shape: tuple[int, ...],
         param_basis_pairs: list[tuple[tuple[int, ...], str]],
         trex_scale_factors: dict[str, float] | None = None,
+        postselect_mask: np.ndarray | None = None,
     ) -> tuple[
         np.typing.NDArray[np.float64], np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]
     ]:
@@ -970,6 +975,7 @@ class MitigationTask:
             param_shape: The shape of the parameter values.
             param_basis_pairs: The map between params ndindexes to measure basis.
             trex_scale_factors: A dictionary mapping each observable term to its scale factor for TREX mitigation.
+            postselect_mask: A boolean mask indicating which shots to keep or discard.
 
         Returns:
             A tuple ``(exp_vals, stds, ensemble_stds)``, where ``exp_vals`` are expectation values,
@@ -1033,8 +1039,11 @@ class MitigationTask:
                 # Get measurement data for this configuration
                 # datum shape: (num_randomizations, shots_per_randomization, num_qubits)
                 datum = data[:, config_idx, :, :]
+                mask = postselect_mask[:, config_idx, :] if postselect_mask is not None else None
                 term_exp_val, term_ensemble_variance, term_twirl_variance = (
-                    _compute_single_term_exp_val_with_twirl_variance(observable_term, datum)
+                    _compute_single_term_exp_val_with_twirl_variance(
+                        observable_term, datum, postselect_mask=mask
+                    )
                 )
 
                 # Calculate scale factor in case TREX mitigation is used
@@ -1042,13 +1051,20 @@ class MitigationTask:
                     trex_scale_factors[observable_term] if trex_scale_factors is not None else 1
                 )
 
+                term_shots = np.sum(mask) if mask is not None else total_shots
+
                 # Accumulate with coefficient
                 exp_val += coeff * term_exp_val * term_scale_factor
-                ensemble_variance += (coeff**2) * term_ensemble_variance * (term_scale_factor**2)
+                term_ensemble_var = (
+                    (coeff**2) * (term_ensemble_variance / term_shots) * (term_scale_factor**2)
+                    if term_shots > 0
+                    else np.nan
+                )
+                ensemble_variance += term_ensemble_var
                 twirl_variance += (coeff**2) * term_twirl_variance * (term_scale_factor**2)
 
             exp_vals[bcast_index] = exp_val
-            ensemble_stds[bcast_index] = np.sqrt(ensemble_variance / total_shots)
+            ensemble_stds[bcast_index] = np.sqrt(ensemble_variance)
             # When twirling is off (num_randomizations=1), stds equals ensemble_standard_error
             if num_randomizations == 1:
                 stds[bcast_index] = ensemble_stds[bcast_index]
@@ -1112,6 +1128,7 @@ class MitigationTask:
         measure_noise_data: PauliLindbladMap | np.ndarray | None = None,
         meas_qubits: list[int] | None = None,
         circuit_num_qubits: int | None = None,
+        postselect_mask_function: Callable[[QuantumProgramItemResult], np.ndarray] | None = None,
     ) -> PubResult:
         """Process expectation values for a single item result.
 
@@ -1133,6 +1150,8 @@ class MitigationTask:
             circuit_num_qubits: The total number of qubits in the circuit. Used together with
                 ``meas_qubits`` to expand the data back to the full width. Must be given together
                 with ``meas_qubits``.
+            postselect_mask_function: A function that computes a postselection mask from the item result,
+                used to filter shots from the result. For example, :meth:`.PostSelector.compute_mask`.
 
         Returns:
             A PubResult which contains ``evs`` and ``std`` as fields in its data, where ``evs`` are expectation values,
@@ -1157,6 +1176,10 @@ class MitigationTask:
         # indices without any remapping.
         data = _expand_meas_data_and_apply_flips(
             data, item_result.get("measurement_flips._meas", None), meas_qubits, circuit_num_qubits
+        )
+
+        postselect_mask = (
+            postselect_mask_function(item_result) if postselect_mask_function is not None else None
         )
 
         trex_scale_factors = (
@@ -1188,6 +1211,7 @@ class MitigationTask:
                     param_shape,
                     param_basis_pairs,
                     trex_scale_factors,
+                    postselect_mask=postselect_mask,
                 )
             )
             data_bin = DataBin(
@@ -1218,6 +1242,7 @@ class MitigationTask:
             meas_basis_axis=1,
             avg_axis=0,
             rescale_factors=trex_scale_factors,
+            postselect_mask=postselect_mask,
         )
 
         exp_vals, ensemble_stds = (np.array(x) for x in zip(*exp_val_and_std, strict=True))

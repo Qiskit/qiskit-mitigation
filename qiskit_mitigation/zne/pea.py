@@ -371,6 +371,7 @@ class PEA(MitigationTask):
             Callable[..., np.ndarray], list[float], tuple[float, ...] | tuple[list[float], ...]
         ]
         | None = None,
+        postselect_mask_function: Callable[[QuantumProgramItemResult], np.ndarray] | None = None,
     ) -> PubResult:
         """Process expectation values for a single item result.
 
@@ -394,6 +395,8 @@ class PEA(MitigationTask):
                 ``(function, p_0, bounds)``. The function should take the independent variable as the first argument and
                 the parameters to fit as separate remaining arguments. p_0 is an array of the initial guess for the parameters,
                 and bounds are the bounds on the parameters. These parameters will be sent as arguments for ``scipy.optimize.curve_fit`` function.
+            postselect_mask_function: A function that computes a postselection mask from the item result,
+                used to filter shots from the result. For example, :meth:`.PostSelector.compute_mask`.
 
         Returns:
             A PubResult which contains the following fields:
@@ -452,6 +455,7 @@ class PEA(MitigationTask):
             custom_fit=custom_fit,
             meas_qubits=self.meas_qubits,
             circuit_num_qubits=self.circuit_num_qubits,
+            postselect_mask_function=postselect_mask_function,
         )
 
     @staticmethod
@@ -526,6 +530,7 @@ class PEA(MitigationTask):
         | None = None,
         meas_qubits: list[int] | None = None,
         circuit_num_qubits: int | None = None,
+        postselect_mask_function: Callable[[QuantumProgramItemResult], np.ndarray] | None = None,
     ) -> PubResult:
         """Process expectation values for a single item result.
 
@@ -563,6 +568,8 @@ class PEA(MitigationTask):
             circuit_num_qubits: The total number of qubits in the circuit. Used together with
                 ``meas_qubits`` to expand the data back to the full width. Must be given together
                 with ``meas_qubits``.
+            postselect_mask_function: A function that computes a postselection mask from the item result,
+                used to filter shots from the result. For example, :meth:`.PostSelector.compute_mask`.
 
         Returns:
             A PubResult which contains the following fields:
@@ -685,6 +692,11 @@ class PEA(MitigationTask):
             extrapolator,
             trex_scale_factors,
             custom_fit=custom_fit,
+            postselect_mask=(
+                postselect_mask_function(item_result)
+                if postselect_mask_function is not None
+                else None
+            ),
         )
         returned_extrapolated_exp_vals = (
             None if np.asarray(extrapolated_noise_factors).size == 0 else extrapolated_exp_vals

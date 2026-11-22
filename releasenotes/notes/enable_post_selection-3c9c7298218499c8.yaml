@@ -1,0 +1,20 @@
+---
+features:
+  - |
+    Added a ``pass_manager`` argument to the ``prepare()`` method of :class:`.MitigationTask`,
+    :class:`.PEC`, :class:`.GateFolding` and :class:`.PEA`. If given, the pass manager runs on the
+    template circuit after boxing and building it, and the transpiled circuit is used as the template of
+    the created program item.
+  - |
+    Added support for post-selection when computing expectation values. The ``postprocess()`` and
+    ``compute_expectation_value()`` methods of :class:`.MitigationTask`, :class:`.PEC`,
+    :class:`.GateFolding` and :class:`.PEA` now accept a ``postselect_mask_function`` argument. This is a
+    function that computes a boolean shot mask from an item result (for example,
+    :meth:`.PostSelector.compute_mask`). Shots excluded by the mask are discarded before computing
+    expectation values and standard errors.
+fixes:
+  - |
+    Fixed the standard errors of the noise-amplified expectation values that :class:`.GateFolding` and
+    :class:`.PEA` pass to the extrapolation. They were previously the per-shot standard deviation and are now
+    divided by the square root of the number of shots, so the extrapolated standard errors and the
+    extrapolator selection may change.

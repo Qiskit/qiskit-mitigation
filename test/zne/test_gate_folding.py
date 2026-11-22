@@ -529,6 +529,23 @@ class TestCalculateExtrapolatedExpectationValues(unittest.TestCase):
         )[0]
         np.testing.assert_allclose(zero_exp_vals, [LINEAR_ZERO_NOISE], atol=1e-10)
 
+    def test_6d_data_with_postselect_mask(self):
+        """Test _calculate_extrapolated_expectation_values with 6D data and postselect_mask."""
+        # 6D shape: (noise_factors, R, bases, params, S, bits) -> (3, 2, 1, 1, 4, 1)
+        data_6d = np.zeros((3, 2, 1, 1, 4, 1), dtype=bool)
+        postselect_mask = np.ones((3, 2, 1, 1, 4), dtype=bool)
+        res = GateFolding._calculate_extrapolated_expectation_values(
+            data_6d,
+            _obs("Z"),
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "Z")],
+            noise_factors=NOISE_FACTORS,
+            extrapolated_noise_factors=[],
+            extrapolator=["linear"],
+            postselect_mask=postselect_mask,
+        )
+        self.assertEqual(len(res), 8)
+
 
 # ---------------------------------------------------------------------------
 # GateFolding.compute_expectation_value_gate_folding  (static method)
@@ -556,6 +573,27 @@ class TestComputeExpectationValueFateFolding(unittest.TestCase):
         return GateFolding.compute_expectation_value_gate_folding(
             self._item_results() if item_results is None else item_results, **params
         )
+
+    def test_compute_expectation_value_with_postselect_mask_function(self):
+        """``compute_expectation_value_gate_folding`` with ``postselect_mask_function``."""
+        # 4 shots: 2 zeros, 2 ones
+        data = np.array([[[[False], [True], [False], [True]]]], dtype=bool)  # (1, 1, 4, 1)
+        item_results = [{"_meas": data} for _ in NOISE_FACTORS]
+
+        def mask_fn(_res):
+            return np.array([[[True, False, True, False]]])
+
+        pub_result = GateFolding.compute_expectation_value_gate_folding(
+            item_results,
+            observables=_obs("Z"),
+            param_shape=(1,),
+            param_basis_pairs=[((0,), "Z")],
+            noise_factors=NOISE_FACTORS,
+            extrapolator=["linear"],
+            broadcast_obs_and_params=True,
+            postselect_mask_function=mask_fn,
+        )
+        np.testing.assert_allclose(pub_result.data.evs, [1.0])
 
     # ------------------------------------------------------------------
     # Input validation
@@ -901,6 +939,19 @@ class TestGateFoldingPostprocess(unittest.TestCase):
         fake_meas = np.zeros((1, 1, 1, 1), dtype=np.uint8)
         result = gf.postprocess([{"_meas": fake_meas}, {"_meas": fake_meas}])
         self.assertIsInstance(result, PubResult)
+
+    def test_postprocess_with_postselect_mask_function(self):
+        """``GateFolding.postprocess`` forwards ``postselect_mask_function``."""
+        gf = self._make_minimal_gate_folding()
+        gf.param_shape = (1,)
+        data = np.array([[[[False], [True], [False], [True]]]], dtype=bool)
+        item_results = [{"_meas": data} for _ in NOISE_FACTORS]
+
+        def mask_fn(_res):
+            return np.array([[[True, False, True, False]]])
+
+        pub_result = gf.postprocess(item_results, postselect_mask_function=mask_fn)
+        np.testing.assert_allclose(pub_result.data.evs, [1.0])
 
     def test_postprocess_unsupported_version_raises(self):
         """``postprocess`` must raise ValueError when task VERSION is unsupported."""

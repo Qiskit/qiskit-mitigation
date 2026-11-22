@@ -496,6 +496,7 @@ class GateFolding(MitigationTask):
             Callable[..., np.ndarray], list[float], tuple[float, ...] | tuple[list[float], ...]
         ]
         | None = None,
+        postselect_mask_function: Callable[[QuantumProgramItemResult], np.ndarray] | None = None,
     ) -> PubResult:
         """Process expectation values for a single GateFolding task result.
 
@@ -519,6 +520,8 @@ class GateFolding(MitigationTask):
                 ``(function, p_0, bounds)``. The function should take the independent variable as the first argument and
                 the parameters to fit as separate remaining arguments. p_0 is an array of the initial guess for the parameters,
                 and bounds are the bounds on the parameters. These parameters will be sent as arguments for ``scipy.optimize.curve_fit`` function.
+            postselect_mask_function: A function that computes a postselection mask from an item result,
+                used to filter shots from the result. For example, :meth:`.PostSelector.compute_mask`.
 
         Returns:
             A PubResult which contains the following fields:
@@ -579,6 +582,7 @@ class GateFolding(MitigationTask):
             custom_fit=custom_fit,
             meas_qubits=self.meas_qubits,
             circuit_num_qubits=self.circuit_num_qubits,
+            postselect_mask_function=postselect_mask_function,
         )
 
     @staticmethod
@@ -595,6 +599,7 @@ class GateFolding(MitigationTask):
             Callable[..., np.ndarray], list[float], tuple[float, ...] | tuple[list[float], ...]
         ]
         | None = None,
+        postselect_mask: np.ndarray | None = None,
     ) -> tuple[
         np.typing.NDArray[np.float64],
         np.typing.NDArray[np.float64],
@@ -629,6 +634,7 @@ class GateFolding(MitigationTask):
                 ``(function, p_0, bounds)``. The function should take the independent variable as the first argument and
                 the parameters to fit as separate remaining arguments. p_0 is an array of the initial guess for the parameters,
                 and bounds are the bounds on the parameters. These parameters will be sent as arguments for ``scipy.optimize.curve_fit`` function.
+            postselect_mask: Optional boolean array used for postselection.
 
         Returns:
             A tuple with the following entries:
@@ -734,6 +740,9 @@ class GateFolding(MitigationTask):
                 noise_scaled_ensemble_std = []
                 for noise_factor_index in range(len(noise_factors)):
                     noise_factor_data = noise_amplified_data[noise_factor_index]
+                    ps_mask = (
+                        postselect_mask[noise_factor_index] if postselect_mask is not None else None
+                    )
                     if len(noise_factor_data.shape) == 5:
                         # combine the meas_bases and params into a single axis
                         new_shape = (
@@ -742,20 +751,39 @@ class GateFolding(MitigationTask):
                             *noise_factor_data.shape[3:],
                         )
                         noise_factor_data = noise_factor_data.reshape(new_shape)
+                        if ps_mask is not None:
+                            ps_mask_shape = (
+                                ps_mask.shape[0],
+                                ps_mask.shape[1] * ps_mask.shape[2],
+                                *ps_mask.shape[3:],
+                            )
+                            ps_mask = ps_mask.reshape(ps_mask_shape)
                     # Get measurement data for this configuration
                     # datum shape: (num_randomizations, shots_per_randomization, num_qubits)
                     datum = noise_factor_data[:, config_idx, :, :]
+                    mask = ps_mask[:, config_idx, :] if ps_mask is not None else None
                     term_exp_val, term_ensemble_variance, term_twirl_variance = (
-                        _compute_single_term_exp_val_with_twirl_variance(observable_term, datum)
+                        _compute_single_term_exp_val_with_twirl_variance(
+                            observable_term, datum, postselect_mask=mask
+                        )
                     )
                     noise_scaled_exp_vals.append(term_exp_val)
-                    noise_scaled_ensemble_std.append(np.sqrt(term_ensemble_variance))
+                    term_shots = np.sum(mask) if mask is not None else total_shots
+                    term_std = (
+                        np.sqrt(term_ensemble_variance / term_shots) if term_shots > 0 else np.nan
+                    )
+                    noise_scaled_ensemble_std.append(term_std)
 
                     noise_factors_exp_vals[(*bcast_index, noise_factor_index)] += (
                         coeff * term_exp_val * term_scale_factor
                     )
+                    term_ensemble_var = (
+                        (coeff**2) * (term_ensemble_variance / term_shots) * (term_scale_factor**2)
+                        if term_shots > 0
+                        else np.nan
+                    )
                     noise_factors_ensemble_variance[(*bcast_index, noise_factor_index)] += (
-                        (coeff**2) * term_ensemble_variance * term_scale_factor**2
+                        term_ensemble_var
                     )
                     noise_factors_twirl_variance[(*bcast_index, noise_factor_index)] += (
                         (coeff**2) * term_twirl_variance * term_scale_factor**2
@@ -806,7 +834,6 @@ class GateFolding(MitigationTask):
             for noise_factor_index in range(len(noise_factors)):
                 noise_factors_ensemble_stds[(*bcast_index, noise_factor_index)] = np.sqrt(
                     noise_factors_ensemble_variance[(*bcast_index, noise_factor_index)]
-                    / total_shots
                 )
                 noise_factors_twirl_stds[(*bcast_index, noise_factor_index)] = np.sqrt(
                     noise_factors_twirl_variance[(*bcast_index, noise_factor_index)]
@@ -899,6 +926,7 @@ class GateFolding(MitigationTask):
         | None = None,
         meas_qubits: list[int] | None = None,
         circuit_num_qubits: int | None = None,
+        postselect_mask_function: Callable[[QuantumProgramItemResult], np.ndarray] | None = None,
     ) -> PubResult:
         """Process expectation values for a single item result.
 
@@ -936,6 +964,8 @@ class GateFolding(MitigationTask):
             circuit_num_qubits: The total number of qubits in the circuit. Used together with
                 ``meas_qubits`` to expand the data back to the full width. Must be given together
                 with ``meas_qubits``.
+            postselect_mask_function: A function that computes a postselection mask from an item result,
+                used to filter shots from the result. For example, :meth:`.PostSelector.compute_mask`.
 
         Returns:
             A PubResult which contains the following fields:
@@ -1078,6 +1108,11 @@ class GateFolding(MitigationTask):
             extrapolator,
             trex_scale_factors,
             custom_fit,
+            postselect_mask=(
+                np.array([postselect_mask_function(ir) for ir in item_results])
+                if postselect_mask_function is not None
+                else None
+            ),
         )
 
         returned_extrapolated_exp_vals = (
