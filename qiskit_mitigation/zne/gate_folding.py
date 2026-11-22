@@ -300,6 +300,7 @@ class GateFolding(MitigationTask):
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
         trim_measurements: bool = False,
+        pass_manager: PassManager | None = None,
         *,
         folding_method: Literal["random", "front", "back"] = "random",
         noise_factors: Sequence[float | int] = (1, 3, 5),
@@ -319,6 +320,9 @@ class GateFolding(MitigationTask):
         of the observables. Otherwise, every parameter will be executed for each observable (outer
         product of the parameters and observables). Note that the post-processing of an outer
         product is usually faster.
+        If a ``pass_manager`` is provided, it is executed on the template circuit after boxing and
+        building the template circuit, and the transpiled circuit is used as the template in the
+        created program item.
 
         Args:
             circuit: The quantum circuit.
@@ -334,6 +338,10 @@ class GateFolding(MitigationTask):
             trim_measurements: Whether to measure only the qubits that have instructions on them or
                 are in the support of the observables, instead of all the qubits of the circuit.
                 The measured qubits are available in ``meas_qubits`` after the call.
+            pass_manager: A pass manager to transpile the template circuit created for the
+                quantum program. Note that this pass manager runs on the circuit **after** boxing
+                and building the template circuit. If ``None``, no transpilation is applied to the
+                template circuit.
             folding_method: The technique to use to fold the 2-qubit gates to amplify the noise.
                 If the noise factor requires amplifying only a subset of the gates, then these
                 gates are selected according to the method:
@@ -414,6 +422,8 @@ class GateFolding(MitigationTask):
             )
             # Build the template and the samplex
             template, samplex = build(boxed_circuit)
+            if pass_manager is not None:
+                template = self._run_pass_manager(template, pass_manager)
 
             # Prepare samplex_arguments
             samplex_arguments, shape = self._create_samplex_arguments(samplex, boxed_circuit)

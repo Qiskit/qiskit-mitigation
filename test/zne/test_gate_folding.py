@@ -24,6 +24,8 @@ from qiskit.circuit import Parameter
 from qiskit.primitives import PubResult
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, SparsePauliOp
+from qiskit.transpiler import PassManager
+from qiskit_mitigation.postselection.passes import AddPostCircuitNonMarkovianErrorChecks
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.zne.gate_folding import GateFolding
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult
@@ -200,6 +202,22 @@ class TestGateFoldingPrepare(unittest.TestCase):
             self.circuit, self.observables, parameters=None, noise_factors=(1, 3, 5)
         )
         self.assertEqual(len(program.items), 3)
+
+    def test_prepare_with_pass_manager(self):
+        """Passing ``pass_manager`` to ``prepare`` should run it on each template circuit."""
+        pm = PassManager([AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx")])
+        program = self.gf.prepare(
+            self.circuit,
+            self.observables,
+            parameters=None,
+            pass_manager=pm,
+            noise_factors=(1, 3),
+        )
+        self.assertEqual(len(program.items), 2)
+        for item in program.items:
+            reg_names = [reg.name for reg in item.circuit.cregs]
+            self.assertIn("_meas", reg_names)
+            self.assertIn("_meas_ps", reg_names)
 
     def test_noise_factors_saved_as_float_array(self):
         """``noise_factors`` must be stored as a float ndarray."""

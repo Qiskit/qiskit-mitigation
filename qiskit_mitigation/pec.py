@@ -31,7 +31,7 @@ from qiskit.quantum_info import (
     QubitSparsePauliList,
     SparsePauliOp,
 )
-from qiskit.transpiler import CouplingMap
+from qiskit.transpiler import CouplingMap, PassManager
 from qiskit.utils import LazyImportTester
 from samplomatic import InjectNoise, build
 from samplomatic.quantum_program import (
@@ -177,6 +177,7 @@ class PEC(MitigationTask):
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
         trim_measurements: bool = False,
+        pass_manager: PassManager | None = None,
         *,
         noise_maps: dict[str, PauliLindbladMap] | None = None,
         scale_randomizations_by_gamma: bool = True,
@@ -196,6 +197,9 @@ class PEC(MitigationTask):
         of the observables. Otherwise, every parameter will be executed for each observable (outer
         product of the parameters and observables). Note that the post-processing of an outer
         product is usually faster.
+        If a ``pass_manager`` is provided, it is executed on the template circuit after boxing and
+        building the template circuit, and the transpiled circuit is used as the template in the
+        created program item.
 
         Args:
             circuit: The quantum circuit.
@@ -217,6 +221,10 @@ class PEC(MitigationTask):
                     (:func:`~qiskit_mitigation.find_combined_unique_layers` or
                     :meth:`~qiskit_mitigation.MitigationTask.find_unique_layers`) if and only if
                     ``trim_measurements=True`` is passed to ``prepare``, and pass the same observables.
+            pass_manager: A pass manager to transpile the template circuit created for the
+                quantum program. Note that this pass manager runs on the circuit **after** boxing
+                and building the template circuit. If ``None``, no transpilation is applied to the
+                template circuit.
             noise_maps: A mapping between layer ref to a noise model to use for PEC mitigation
                 method. The dict might contain layers not present in the given circuit, but must contain all
                 the mitigated layers. Assumes that the unique layers used for noise learning were extracted
@@ -273,6 +281,8 @@ class PEC(MitigationTask):
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex
         template, samplex = build(boxed_circuit)
+        if pass_manager is not None:
+            template = self._run_pass_manager(template, pass_manager)
 
         # Prepare samplex_arguments
         samplex_arguments, shape = self._create_samplex_arguments(samplex, boxed_circuit)

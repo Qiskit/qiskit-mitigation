@@ -24,6 +24,8 @@ from qiskit.circuit import Parameter
 from qiskit.primitives import PubResult
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, SparsePauliOp
+from qiskit.transpiler import PassManager
+from qiskit_mitigation.postselection.passes import AddPostCircuitNonMarkovianErrorChecks
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.zne.pea import PEA
 from samplomatic import InjectNoise
@@ -287,6 +289,23 @@ class TestPEAPrepare(unittest.TestCase):
                 parameters=None,
                 noise_maps=None,
             )
+
+    def test_prepare_with_pass_manager(self):
+        """Passing ``pass_manager`` to ``prepare`` should run it on the template circuit."""
+        pea = PEA()
+        pm = PassManager([AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx")])
+        program = pea.prepare(
+            self.circuit,
+            self.observables,
+            parameters=None,
+            pass_manager=pm,
+            noise_maps=self.noise_map,
+            noise_factors=NOISE_FACTORS,
+        )
+        template_circuit = program.items[0].circuit
+        reg_names = [reg.name for reg in template_circuit.cregs]
+        self.assertIn("_meas", reg_names)
+        self.assertIn("_meas_ps", reg_names)
 
     def test_noise_factors_saved_as_float_array(self):
         """``noise_factors`` must be stored as a ``float`` ndarray."""

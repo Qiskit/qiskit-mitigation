@@ -25,10 +25,12 @@ import numpy as np
 from qiskit import QuantumCircuit
 from qiskit.circuit import BoxOp, CircuitInstruction, ClassicalRegister
 from qiskit.circuit.exceptions import CircuitError
+from qiskit.passmanager import BasePassManager
 from qiskit.primitives import DataBin, PubResult
 from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, PauliList, SparsePauliOp
+from qiskit.transpiler import PassManager
 from samplomatic import ChangeBasis, build
 from samplomatic.quantum_program import (
     QuantumProgram,
@@ -186,6 +188,40 @@ class MitigationTask:
             ) from ex
         boxed_circuit = boxing_pm.run(circuit)
         return boxed_circuit
+
+    @classmethod
+    def _run_pass_manager(
+        cls,
+        circuit: QuantumCircuit,
+        pass_manager: PassManager,
+    ) -> QuantumCircuit:
+        """Validate and run a pass manager on a circuit.
+
+        Args:
+            circuit: The quantum circuit to transpile.
+            pass_manager: The pass manager to run on the circuit.
+
+        Returns:
+            The transpiled quantum circuit.
+
+        Raises:
+            TypeError: If ``pass_manager`` is not an instance of :class:`~qiskit.transpiler.PassManager`
+                or ``circuit`` is not an instance of :class:`~qiskit.circuit.QuantumCircuit`.
+            ValueError: If the pass manager fails to run on the circuit.
+        """
+        if not isinstance(pass_manager, (PassManager, BasePassManager)):
+            raise TypeError(
+                f"pass_manager must be an instance of PassManager, got {type(pass_manager).__name__}."
+            )
+        if not isinstance(circuit, QuantumCircuit):
+            raise TypeError(
+                f"circuit must be an instance of QuantumCircuit, got {type(circuit).__name__}."
+            )
+        try:
+            transpiled_circuit = pass_manager.run(circuit)
+        except Exception as ex:
+            raise ValueError(f"Failed to run pass manager with the following error, {ex}") from ex
+        return transpiled_circuit
 
     @classmethod
     def _make_samplex_arguments(
@@ -728,6 +764,7 @@ class MitigationTask:
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
         trim_measurements: bool = False,
+        pass_manager: PassManager | None = None,
     ) -> QuantumProgram:
         """Creates a :class:`~.QuantumProgram` for executing via Executor.
 
@@ -742,6 +779,9 @@ class MitigationTask:
         of the observables. Otherwise, every parameter will be executed for each observable (outer
         product of the parameters and observables). Note that the post-processing of an outer
         product is usually faster.
+        If a ``pass_manager`` is provided, it is executed on the template circuit after boxing and
+        building the template circuit, and the transpiled circuit is used as the template in the
+        created program item.
 
         Args:
             circuit: The quantum circuit.
@@ -767,6 +807,10 @@ class MitigationTask:
                     :meth:`~qiskit_mitigation.MitigationTask.find_unique_layers`: pass
                     ``observables`` to the layer finder if and only if ``trim_measurements=True``
                     is passed to ``prepare``, and pass the same observables.
+            pass_manager: A pass manager to transpile the template circuit created for the
+                quantum program. Note that this pass manager runs on the circuit **after** boxing
+                and building the template circuit. If ``None``, no transpilation is applied to the
+                template circuit.
 
         Returns:
             A :class:`~.QuantumProgram` that can be executed via Executor.
@@ -803,6 +847,8 @@ class MitigationTask:
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex
         template, samplex = build(boxed_circuit)
+        if pass_manager is not None:
+            template = self._run_pass_manager(template, pass_manager)
 
         # Prepare samplex_arguments
         samplex_arguments, shape = self._create_samplex_arguments(samplex, boxed_circuit)

@@ -32,7 +32,9 @@ from qiskit.primitives import PubResult
 from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliList, SparsePauliOp
+from qiskit.transpiler import PassManager
 from qiskit_mitigation.mitigation_task import MitigationTask
+from qiskit_mitigation.postselection.passes import AddPostCircuitNonMarkovianErrorChecks
 from qiskit_mitigation.trex import TREX
 from samplomatic import build
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult
@@ -298,6 +300,38 @@ class TestBoxCircuit(unittest.TestCase):
         with self.assertRaises(ValueError):
             # Passing `enable_measures=False` will raise from the base guard clause
             MitigationTask._box_circuit(_simple_circuit(), {"enable_measures": False})
+
+
+# ---------------------------------------------------------------------------
+# MitigationTask._run_pass_manager
+# ---------------------------------------------------------------------------
+
+
+class TestRunPassManager(unittest.TestCase):
+    def test_run_pass_manager_success(self):
+        qc = _simple_circuit()
+        pm = PassManager()
+        result = MitigationTask._run_pass_manager(qc, pm)
+        self.assertIsInstance(result, QuantumCircuit)
+
+    def test_run_pass_manager_invalid_pm_type(self):
+        qc = _simple_circuit()
+        for invalid_pm in (None, "pm", 123, [], {}):
+            with self.assertRaises(TypeError):
+                MitigationTask._run_pass_manager(qc, invalid_pm)
+
+    def test_run_pass_manager_invalid_circuit_type(self):
+        pm = PassManager()
+        for invalid_qc in (None, "circuit", 123, [], {}):
+            with self.assertRaises(TypeError):
+                MitigationTask._run_pass_manager(invalid_qc, pm)
+
+    def test_run_pass_manager_failure_raises_value_error(self):
+        qc = _simple_circuit()
+        mock_pm = MagicMock(spec=PassManager)
+        mock_pm.run.side_effect = RuntimeError("Transpilation failed")
+        with self.assertRaises(ValueError):
+            MitigationTask._run_pass_manager(qc, mock_pm)
 
 
 # ---------------------------------------------------------------------------
@@ -1197,6 +1231,40 @@ class TestMitigationTaskPrepare(unittest.TestCase):
         )
         self.assertIsInstance(program, QuantumProgram)
         self.assertEqual(len(program.items), 1)
+
+    def test_prepare_with_pass_manager(self):
+        """Passing ``pass_manager`` to ``prepare`` should run it on the template circuit."""
+        task = MitigationTask()
+        mock_pm = MagicMock(spec=PassManager)
+        dummy_transpiled_circuit = QuantumCircuit(2)
+        mock_pm.run.return_value = dummy_transpiled_circuit
+
+        with patch.object(
+            MitigationTask, "_run_pass_manager", wraps=MitigationTask._run_pass_manager
+        ) as mock_run_pm:
+            program = task.prepare(self.circuit, self.obs, parameters=None, pass_manager=mock_pm)
+            mock_run_pm.assert_called_once()
+            template_arg, pm_arg = mock_run_pm.call_args[0]
+            self.assertIsInstance(template_arg, QuantumCircuit)
+            self.assertIs(pm_arg, mock_pm)
+
+        self.assertIs(program.items[0].circuit, dummy_transpiled_circuit)
+
+    def test_prepare_with_invalid_pass_manager_raises(self):
+        """Passing an invalid ``pass_manager`` to ``prepare`` should raise TypeError."""
+        task = MitigationTask()
+        with self.assertRaises(TypeError):
+            task.prepare(self.circuit, self.obs, parameters=None, pass_manager="not_a_pm")
+
+    def test_prepare_with_post_circuit_error_checks_pass(self):
+        """Test ``prepare`` with a real pass manager containing ``AddPostCircuitNonMarkovianErrorChecks``."""
+        task = MitigationTask()
+        pm = PassManager([AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx")])
+        program = task.prepare(self.circuit, self.obs, parameters=None, pass_manager=pm)
+        template_circuit = program.items[0].circuit
+        reg_names = [reg.name for reg in template_circuit.cregs]
+        self.assertIn("_meas", reg_names)
+        self.assertIn("_meas_ps", reg_names)
 
 
 # ---------------------------------------------------------------------------
