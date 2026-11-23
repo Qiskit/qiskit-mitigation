@@ -1219,13 +1219,11 @@ class TestPECSlc(unittest.TestCase):
         result = PEC()._validate_slc_settings(0.5, pass_manager)
         self.assertIs(result, pass_manager)
 
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_compute_bounds_rejects_pass_manager(self):
         """The SLC bounds need the ``inject_noise_strategy`` option, so a ``PassManager`` is rejected."""
         pass_manager = generate_boxing_pass_manager(enable_measures=True)
-        with (
-            patch.object(HAS_SLC, "_bool", True),
-            self.assertRaisesRegex(ValueError, "cannot be a PassManager"),
-        ):
+        with self.assertRaisesRegex(ValueError, "cannot be a PassManager"):
             PEC().generate_slc_bounds_computation_input(
                 _simple_circuit(), custom_boxing_options=pass_manager
             )
