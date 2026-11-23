@@ -27,6 +27,7 @@ from qiskit.quantum_info import Pauli, SparsePauliOp
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.zne.gate_folding import GateFolding
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult
+from samplomatic.transpiler import generate_boxing_pass_manager
 
 from ..trim_helpers import TrimMeasurementsTestsMixin
 
@@ -135,6 +136,13 @@ class TestGateFoldingBoxCircuit(unittest.TestCase):
     def setUp(self):
         self.gf = GateFolding()
         self.circuit = _simple_circuit()
+
+    def test_pass_manager_is_used_for_boxing(self):
+        """A ``PassManager`` is used as is, without the GateFolding default options."""
+        pass_manager = generate_boxing_pass_manager(enable_gates=True, enable_measures=True)
+        boxed = self.gf._box_circuit(self.circuit, pass_manager)
+        self.assertTrue(any(inst.operation.name == "box" for inst in boxed.data))
+        self.assertIn("_meas", [r.name for r in boxed.cregs])
 
     def test_returns_quantum_circuit(self):
         """The boxed circuit must be a :class:`~qiskit.QuantumCircuit`."""

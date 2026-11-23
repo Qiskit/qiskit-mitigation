@@ -22,6 +22,7 @@ from qiskit import QuantumCircuit
 from qiskit.converters import circuit_to_dag
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import SparsePauliOp
+from qiskit.transpiler import PassManager
 
 
 def _get_active_qubits(circuit: QuantumCircuit) -> list[int]:
@@ -65,7 +66,7 @@ def _get_observable_qubit_indices(
 def derive_meas_qubits(
     circuit: QuantumCircuit,
     observables: ObservablesArray | Sequence[SparsePauliOp],
-    boxing_options: dict | None = None,
+    boxing_options: dict | PassManager | None = None,
 ) -> list[int]:
     """Derive the qubits that must be measured when trimming the measurements of a circuit.
 
@@ -81,7 +82,8 @@ def derive_meas_qubits(
         observables: The observables whose expectation values are estimated on ``circuit``.
         boxing_options: The boxing options given by the user. Used to warn when
             ``twirling_strategy="all"`` is set, since that strategy boxes all qubits and
-            trimming measurements therefore has no effect.
+            trimming measurements therefore has no effect. A boxing pass manager has no
+            options to check, so it is ignored.
 
     Returns:
         Sorted list of the qubit indices to measure.
@@ -89,7 +91,7 @@ def derive_meas_qubits(
     Raises:
         ValueError: If no qubit is active or observed.
     """
-    if boxing_options is not None and boxing_options.get("twirling_strategy") == "all":
+    if isinstance(boxing_options, dict) and boxing_options.get("twirling_strategy") == "all":
         warnings.warn(
             'Trimming the measurements has no effect with ``twirling_strategy="all"``, '
             "since this strategy boxes all the qubits — all of them are active.",

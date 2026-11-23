@@ -27,6 +27,7 @@ from qiskit.quantum_info import (
     QubitSparsePauli,
     SparsePauliOp,
 )
+from qiskit.transpiler import PassManager
 from samplomatic import build
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult, SamplexItem
 from samplomatic.transpiler import generate_boxing_pass_manager
@@ -52,21 +53,26 @@ class TREX:
         self._program_item_index = None
 
     @staticmethod
-    def _edit_boxing_options(boxing_options: dict | None) -> dict:
+    def _edit_boxing_options(boxing_options: dict | PassManager | None) -> dict | PassManager:
         """Add the boxing options that a task needs in order to use TREX.
 
         Measurements are enabled and annotated for all qubits. The given dict is not modified.
+        A :class:`~qiskit.transpiler.PassManager` is returned unchanged, since it replaces the boxing
+        options and cannot be edited.
 
         Args:
             boxing_options: The boxing options of a mitigation task. If ``None``, the TREX
                 boxing options only are returned.
 
         Returns:
-            A new dict with the boxing options, including the options required by TREX.
+            A new dict with the boxing options, including the options required by TREX, or the
+            given boxing pass manager.
 
         Raises:
             ValueError: If ``boxing_options["enable_measures"]`` is ``False``.
         """
+        if isinstance(boxing_options, PassManager):
+            return boxing_options
         if boxing_options is None:
             return {"enable_measures": True, "measure_annotations": "all"}
         edited_boxing_options = boxing_options.copy()
@@ -112,7 +118,7 @@ class TREX:
         self,
         num_randomizations: int,
         quantum_program: QuantumProgram,
-        custom_boxing_options: dict | None = None,
+        custom_boxing_options: dict | PassManager | None = None,
     ) -> QuantumProgram:
         """Adds a TREX calibration item to the quantum program.
 
@@ -216,7 +222,7 @@ class TREX:
     def _box_circuit(
         cls,
         circuit: QuantumCircuit,
-        boxing_options: dict | None,
+        boxing_options: dict | PassManager | None,
         disable_measure_noise_injection: bool = False,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
@@ -240,29 +246,32 @@ class TREX:
             ValueError: If ``boxing_options["measure_annotations"]`` is not `twirl`.
             ValueError: If the boxing pass manager fails to run.
         """
-        if boxing_options is None:
-            boxing_options = {}
-        edited_boxing_options = boxing_options.copy()
-        if "enable_measures" not in edited_boxing_options:
-            edited_boxing_options["enable_measures"] = True
-            edited_boxing_options["measure_annotations"] = "twirl"
-        elif not edited_boxing_options["enable_measures"]:
-            raise ValueError('boxing_options["enable_measures"] may not be False.')
-        if (
-            "measure_annotations" in edited_boxing_options
-            and edited_boxing_options["measure_annotations"] != "twirl"
-        ):
-            raise ValueError('boxing_options["measure_annotations"] must be `twirl`.')
-        if disable_measure_noise_injection and edited_boxing_options.get(
-            "inject_noise_targets"
-        ) in ("all", "measures"):
-            edited_boxing_options["inject_noise_targets"] = "none"
-        try:
-            boxing_pm = generate_boxing_pass_manager(**edited_boxing_options)
-        except Exception as ex:
-            raise ValueError(
-                f"Failed to generate boxing pass manager with the following error, {ex}"
-            ) from ex
+        if isinstance(boxing_options, PassManager):
+            boxing_pm = boxing_options
+        else:
+            if boxing_options is None:
+                boxing_options = {}
+            edited_boxing_options = boxing_options.copy()
+            if "enable_measures" not in edited_boxing_options:
+                edited_boxing_options["enable_measures"] = True
+                edited_boxing_options["measure_annotations"] = "twirl"
+            elif not edited_boxing_options["enable_measures"]:
+                raise ValueError('boxing_options["enable_measures"] may not be False.')
+            if (
+                "measure_annotations" in edited_boxing_options
+                and edited_boxing_options["measure_annotations"] != "twirl"
+            ):
+                raise ValueError('boxing_options["measure_annotations"] must be `twirl`.')
+            if disable_measure_noise_injection and edited_boxing_options.get(
+                "inject_noise_targets"
+            ) in ("all", "measures"):
+                edited_boxing_options["inject_noise_targets"] = "none"
+            try:
+                boxing_pm = generate_boxing_pass_manager(**edited_boxing_options)
+            except Exception as ex:
+                raise ValueError(
+                    f"Failed to generate boxing pass manager with the following error, {ex}"
+                ) from ex
         return boxing_pm.run(circuit)
 
     def _prepare_calibration_circuit(

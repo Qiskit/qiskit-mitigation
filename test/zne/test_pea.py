@@ -28,6 +28,7 @@ from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.zne.pea import PEA
 from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
+from samplomatic.transpiler import generate_boxing_pass_manager
 from samplomatic.utils import get_annotation
 
 from ..trim_helpers import LearnedLayersTestsMixin, TrimMeasurementsTestsMixin
@@ -147,6 +148,13 @@ class TestPEABoxCircuit(unittest.TestCase):
     def setUp(self):
         self.pea = PEA()
         self.circuit = _simple_circuit()
+
+    def test_pass_manager_is_used_without_pea_options(self):
+        """A ``PassManager`` boxes the circuit as is; PEA options are not enforced on it."""
+        pass_manager = generate_boxing_pass_manager(enable_gates=False, enable_measures=True)
+        result = self.pea._box_circuit(self.circuit, pass_manager)
+        self.assertTrue(any(inst.operation.name == "box" for inst in result.data))
+        self.assertIn("_meas", [r.name for r in result.cregs])
 
     # --- enable_gates ---
 
