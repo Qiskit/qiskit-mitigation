@@ -1,0 +1,10 @@
+---
+features:
+  - |
+    Integrated the ``qiskit-addon-slc`` package directly into ``qiskit-mitigation`` as the
+    :mod:`qiskit_mitigation.slc` sub-package. This includes:
+
+    * :mod:`qiskit_mitigation.slc.bounds`: Functions for computing error bounds forming shaded lightcones.
+    * :mod:`qiskit_mitigation.slc.utils`: Utilities such as noise model generation, operator reduction, and extremal eigenvalue computation.
+    * :mod:`qiskit_mitigation.slc.visualization`: Visualization and animation tools for shaded lightcones.
+    * :mod:`qiskit_mitigation.slc.globals`: Global configuration settings.

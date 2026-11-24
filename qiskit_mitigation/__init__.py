@@ -15,6 +15,7 @@
 # we should set up its RST file.
 """Qiskit mitigation Python API."""
 
+from . import slc
 from .mitigation_task import MitigationTask
 from .pec import PEC
 from .trex import TREX
@@ -30,4 +31,5 @@ __all__ = [
     "MitigationTask",
     "find_combined_unique_layers",
     "load_tasks_from_result",
+    "slc",
 ]

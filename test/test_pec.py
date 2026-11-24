@@ -18,16 +18,22 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-import pytest
 from qiskit import QuantumCircuit
 from qiskit.circuit import Parameter
-from qiskit.exceptions import MissingOptionalLibraryError
 from qiskit.primitives import PubResult
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, SparsePauliOp
 from qiskit.transpiler import CouplingMap
 from qiskit_mitigation.mitigation_task import MitigationTask
-from qiskit_mitigation.pec import HAS_SLC, PEC
+from qiskit_mitigation.pec import PEC
+from qiskit_mitigation.slc.bounds import (
+    compute_backward_bounds,
+    compute_forward_bounds,
+    compute_local_scales,
+    merge_bounds,
+    tighten_with_speed_limit,
+)
+from qiskit_mitigation.slc.utils import generate_noise_model_paulis
 from qiskit_mitigation.trex import TREX
 from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
@@ -1164,8 +1170,6 @@ def _mock_slc_noise_maps(
     rate: float = 0.01,
 ) -> dict[str, PauliLindbladMap]:
     """Return mock learned noise maps for testing SLC integration."""
-    from qiskit_addon_slc.utils import generate_noise_model_paulis
-
     pec_layers = [
         layer
         for layer in pec.find_unique_layers(circuit, custom_boxing_options)
@@ -1200,12 +1204,6 @@ class TestPECSlc(unittest.TestCase):
 
     # -- generate_slc_bounds_computation_input -------------
 
-    def test_compute_bounds_raises_when_slc_missing(self):
-        """Without the optional dependency, a ``MissingOptionalLibraryError`` must be raised."""
-        with patch.object(HAS_SLC, "_bool", False), self.assertRaises(MissingOptionalLibraryError):
-            PEC().generate_slc_bounds_computation_input(_simple_circuit())
-
-    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_get_bounds_input_reuses_saved_boxed_circuit(self):
         """Calling the function twice with the same circuit object reuses the saved boxed circuit."""
         pec = PEC()
@@ -1215,7 +1213,6 @@ class TestPECSlc(unittest.TestCase):
         self.assertIs(boxed_again, boxed)
         self.assertGreater(len(noise_model_paulis), 0)
 
-    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_compute_bounds_raises_on_parametric_circuit(self):
         """A circuit with unbound parameters must raise ``ValueError``."""
         qc = QuantumCircuit(1)
@@ -1223,15 +1220,8 @@ class TestPECSlc(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unbounded parameters"):
             PEC().generate_slc_bounds_computation_input(qc)
 
-    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_generate_slc_bounds_computation_input_work_with_compute_bounds(self):
         """generate_slc_bounds_computation_input results enable computing bounds."""
-        from qiskit_addon_slc.bounds import (
-            compute_backward_bounds,
-            compute_forward_bounds,
-            tighten_with_speed_limit,
-        )
-
         pec = PEC()
         qc = _simple_circuit()
         obs = SparsePauliOp("ZZ")
@@ -1293,11 +1283,8 @@ class TestPECSlc(unittest.TestCase):
         np.testing.assert_allclose(forward["m0"].rates, expected_fwd_rates)
         np.testing.assert_allclose(backward["m0"].rates, expected_bwd_rates)
 
-    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_compute_bounds_with_coupling_map(self):
         """Bounds can be computed with an explicit coupling map."""
-        from qiskit_addon_slc.bounds import compute_backward_bounds, compute_forward_bounds
-
         pec = PEC()
         qc = _simple_circuit()
         obs = SparsePauliOp("ZZ")
@@ -1347,7 +1334,6 @@ class TestPECSlc(unittest.TestCase):
         np.testing.assert_allclose(forward[key].rates, expected_fwd_rates)
         np.testing.assert_allclose(backward[key].rates, expected_bwd_rates)
 
-    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_compute_bounds_does_not_modify_custom_boxing_options(self):
         """The user supplied ``custom_boxing_options`` must be copied, not modified."""
         options = {"enable_measures": True}
@@ -1356,7 +1342,6 @@ class TestPECSlc(unittest.TestCase):
         )
         self.assertEqual(options, {"enable_measures": True})
 
-    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_get_bounds_input_sets_default_inject_noise_strategy(self):
         """An unspecified ``inject_noise_strategy`` must default to ``individual_modification``."""
         pec = PEC()
@@ -1367,7 +1352,6 @@ class TestPECSlc(unittest.TestCase):
         )
         self.assertNotIn("inject_noise_strategy", options)
 
-    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_get_bounds_input_raises_on_wrong_inject_noise_strategy(self):
         """Any ``inject_noise_strategy`` other than ``individual_modification`` must raise."""
         with self.assertRaisesRegex(ValueError, "individual_modification"):
@@ -1524,17 +1508,8 @@ class TestPECSlc(unittest.TestCase):
                 noise_gain=0.5,
             )
 
-    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
     def test_prepare_with_slc_local_scales_uses_reduced_gamma(self):
         """The reduced gamma from set_slc_local_scales must be used by prepare."""
-        from qiskit_addon_slc.bounds import (
-            compute_backward_bounds,
-            compute_forward_bounds,
-            compute_local_scales,
-            merge_bounds,
-            tighten_with_speed_limit,
-        )
-
         pec = PEC()
         qc = _simple_circuit()
         obs = SparsePauliOp("ZZ")

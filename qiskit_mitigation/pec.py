@@ -32,7 +32,6 @@ from qiskit.quantum_info import (
     SparsePauliOp,
 )
 from qiskit.transpiler import CouplingMap
-from qiskit.utils import LazyImportTester
 from samplomatic import InjectNoise, build
 from samplomatic.quantum_program import (
     QuantumProgram,
@@ -43,6 +42,7 @@ from samplomatic.quantum_program import (
 from samplomatic.utils import get_annotation
 
 from qiskit_mitigation.mitigation_task import MitigationTask
+from qiskit_mitigation.slc.utils import generate_noise_model_paulis
 from qiskit_mitigation.trex import TREX
 from qiskit_mitigation.utils.expectation_values import (
     _compute_single_term_exp_val_with_twirl_variance,
@@ -52,12 +52,6 @@ from qiskit_mitigation.utils.meas_qubits import _expand_meas_data_and_apply_flip
 from qiskit_mitigation.utils.measurement_bases import (
     _convert_pauli_basis,
     _identify_measure_basis,
-)
-
-HAS_SLC = LazyImportTester(
-    {"qiskit_addon_slc"},
-    name="qiskit-addon-slc",
-    install="pip install qiskit-addon-slc",
 )
 
 
@@ -230,7 +224,7 @@ class PEC(MitigationTask):
                 A value greater than one corresponds to amplifying the learned noise.
                 A value of "slc_local_scales" corresponds to partially removing the learned noise of each box according to the
                 local scales learned using shaded light-cones (slc). In order to compute those local scales, first use
-                :meth:`generate_slc_bounds_computation_input` and the ``qiskit-addon-slc`` bounds functions, and then use :meth:`set_slc_local_scales` (see its documentation).
+                :meth:`generate_slc_bounds_computation_input` and the :mod:`qiskit_mitigation.slc.bounds` functions, and then use :meth:`set_slc_local_scales` (see its documentation).
                 If ``"auto"``, the value in the range ``[0, 1]`` will be chosen automatically by the formula ``1 - log(max_overhead) / log(gamma^2)``.
             max_sampling_overhead: If scale_randomizations_by_gamma is True, limit the multiplicative ratio of the number of randomizations.
 
@@ -532,7 +526,6 @@ class PEC(MitigationTask):
         """
         return self._slc_bias
 
-    @HAS_SLC.require_in_call
     def generate_slc_bounds_computation_input(
         self,
         circuit: QuantumCircuit,
@@ -542,7 +535,7 @@ class PEC(MitigationTask):
         """Prepare the inputs required for computing the shaded light-cone (SLC) bounds of a circuit.
 
         The circuit is boxed, and the Pauli error terms of each noisy layer are generated using
-        :func:`qiskit_addon_slc.utils.generate_noise_model_paulis`.
+        :func:`qiskit_mitigation.slc.utils.generate_noise_model_paulis`.
         The circuit, boxed circuit and the boxing options are saved in the class instance.
         If the instance already holds a boxed circuit of the given ``circuit`` (for example, from a previous call to this function or
         to ``prepare``), and ``custom_boxing_options`` is ``None`` or equal to the saved boxing options, the saved boxed circuit is reused instead of
@@ -551,12 +544,9 @@ class PEC(MitigationTask):
         .. important::
             The bounds are keyed by the ``modifier_ref`` of each noisy box, so
             ``custom_boxing_options["inject_noise_strategy"]`` must be ``"individual_modification"``
-            (see :func:`qiskit_addon_slc.bounds.compute_forward_bounds`).
+            (see :func:`qiskit_mitigation.slc.bounds.compute_forward_bounds`).
             If it is not specified, it is set to ``"individual_modification"``. If ``custom_boxing_options`` is ``None``
             and the saved boxing options are used, the same rule applies to them.
-
-        .. note::
-            This function uses the optional dependency of ``qiskit-addon-slc`` package.
 
         Args:
             circuit: The target circuit to compute bounds for.
@@ -569,15 +559,12 @@ class PEC(MitigationTask):
         Returns:
             * The boxed circuit.
             * A dict mapping the ref of each noise model to the Pauli error terms to consider.
-              Can be given as the ``noise_model_paulis`` input of the ``qiskit-addon-slc`` bounds functions.
+              Can be given as the ``noise_model_paulis`` input of the SLC bounds functions.
 
         Raises:
-            MissingOptionalLibraryError: if ``qiskit-addon-slc`` package is not installed.
             ValueError: If the circuit has unbounded parameters.
             ValueError: If ``custom_boxing_options["inject_noise_strategy"]`` is specified and is not ``"individual_modification"``.
         """
-        from qiskit_addon_slc.utils import generate_noise_model_paulis
-
         if circuit.parameters:
             raise ValueError("Can't compute bounds on a circuit with unbounded parameters.")
 
@@ -623,12 +610,12 @@ class PEC(MitigationTask):
         when ``noise_gain="slc_local_scales"`` is passed to :meth:`prepare`.
 
         The parameters ``local_scales``, ``reduced_gamma``, and ``reduced_bias`` can be computed using the
-        ``qiskit-addon-slc`` package. See the `package guide <https://quantum.cloud.ibm.com/docs/addons/qiskit-addon-slc/guides/quickstart>`_ for more information.
+        :mod:`qiskit_mitigation.slc` module. See the package guides for more information.
         A summary of the computation flow is shown below.
 
         1. Call :meth:`generate_slc_bounds_computation_input` with the target circuit to obtain
            the boxed circuit and ``noise_model_paulis``.
-        2. Compute the bounds to pass to :func:`qiskit_addon_slc.bounds.compute_local_scales`.
+        2. Compute the bounds to pass to :func:`qiskit_mitigation.slc.bounds.compute_local_scales`.
            At least one direction is required. Examples:
 
            - **Forward only** (optionally tightened)::
@@ -640,7 +627,7 @@ class PEC(MitigationTask):
 
                bounds = compute_backward_bounds(boxed_circuit, noise_model_paulis)
 
-           - **Both directions merged** (use :func:`qiskit_addon_slc.bounds.merge_bounds`)::
+           - **Both directions merged** (use :func:`qiskit_mitigation.slc.bounds.merge_bounds`)::
 
                bounds = merge_bounds(
                    boxed_circuit,
@@ -652,7 +639,7 @@ class PEC(MitigationTask):
                    noise_maps,
                )
 
-        3. Call :func:`qiskit_addon_slc.bounds.compute_local_scales` with either a
+        3. Call :func:`qiskit_mitigation.slc.bounds.compute_local_scales` with either a
            ``sampling_cost_budget`` (upper bound on gamma^2) or a ``bias_tolerance`` (upper bound
            on the remaining bias) to obtain ``local_scales``, ``sampling_cost``, and
            ``reduced_bias``. Pass ``sqrt(sampling_cost)`` as ``reduced_gamma``::

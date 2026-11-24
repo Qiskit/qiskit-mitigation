@@ -5,7 +5,8 @@ Qiskit Mitigation is a package for handling noise in quantum computations. It co
 1. Implementations of Probabilistic Error Cancellation (PEC), Twirled Readout Error eXtinction (TREX), and Zero-Noise Extrapolation (ZNE) with Probabilistic Error Amplification (PEA) and gate folding amplification methods.
 2. Functionality for computing a postselected noise channel, from circuit symmetries or spacetime checks, to be used with PEC to reduce sampling overhead [[1]](#References).
 3. Postselection using non-Markovian error checks to filter corrupted samples out of measured data.
-4. Support for expectation value calculation with advanced error mitigation.
+4. Shaded lightcones (SLC) for bounding error impact and reducing PEC sampling overhead in exchange for bounded bias [[2]](#References).
+5. Support for expectation value calculation with advanced error mitigation.
 
 ----------------------------------------------------------------------------------------------------
 
@@ -61,3 +62,4 @@ change, or deprecation will be documented in the [release notes](https://quantum
 ### References
 
 1. Laurin E. Fischer, et al., [Spacetime mitigation of logical errors](https://arxiv.org/abs/2609.13108), arXiv:2609.13108 [quant-ph].
+2. Andrew Eddins, et al., [Lightcone shading for classically accelerated quantum error mitigation](https://arxiv.org/abs/2409.04401v1), arXiv:2409.04401v1 [quant-ph].
