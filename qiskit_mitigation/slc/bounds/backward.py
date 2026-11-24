@@ -96,13 +96,16 @@ def time_evolved_norm_backward(
         return CommutatorBounds(float("NaN"), trunc_bias, False)
 
     acts_on_zero = np.any(pauli.paulis.x, axis=1)
+    if not np.any(acts_on_zero):
+        return CommutatorBounds(0.0, trunc_bias, False)
+
     x = pauli.paulis.x[acts_on_zero]
     z = pauli.paulis.z[acts_on_zero]
     c = pauli.coeffs[acts_on_zero]
 
     uniques, which_unique_x = np.unique(x, return_inverse=True, axis=0)
     s = np.zeros(len(uniques), dtype=complex)
-    np.add.at(s, which_unique_x, c * ((1j) ** np.sum(z * x, axis=1)))
+    np.add.at(s, which_unique_x.ravel(), c * ((1j) ** np.sum(z * x, axis=1)))
     sqrt_s = np.linalg.norm(s)
     comm_norm = 2 * sqrt_s
 
