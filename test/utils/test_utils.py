@@ -565,7 +565,7 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
             max(circuit.num_qubits for circuit in circuits),
             options,
             cal_qubits,
-            disable_measure_noise_injection = True,
+            disable_measure_noise_injection=True,
         )
         return find_unique_box_instructions(
             instructions=boxed, normalize_annotations=None, undress_boxes=True
