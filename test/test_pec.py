@@ -31,6 +31,7 @@ from qiskit_mitigation.pec import HAS_SLC, PEC
 from qiskit_mitigation.trex import TREX
 from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
+from samplomatic.transpiler import generate_boxing_pass_manager
 from samplomatic.utils import get_annotation
 
 from .trim_helpers import LearnedLayersTestsMixin, TrimMeasurementsTestsMixin
@@ -113,6 +114,21 @@ class TestPECBoxCircuit(unittest.TestCase):
     def setUp(self):
         self.pec = PEC()
         self.circuit = _simple_circuit()
+
+    def test_pass_manager_is_used_without_pec_options(self):
+        """A ``PassManager`` boxes the circuit as is; PEC options are not enforced on it."""
+        pass_manager = generate_boxing_pass_manager(enable_measures=True, enable_gates=False)
+        result = self.pec._box_circuit(self.circuit, pass_manager)
+        self.assertTrue(any(inst.operation.name == "box" for inst in result.data))
+        self.assertIn("_meas", [r.name for r in result.cregs])
+
+    def test_pass_manager_is_not_overridden_by_pec_options(self):
+        """A ``PassManager`` that disables gates is kept as given, not overridden to enable gates
+        like the PEC options do for a dict."""
+        no_gates = generate_boxing_pass_manager(enable_gates=False, enable_measures=True)
+        pec_default = self.pec._box_circuit(_simple_circuit(), {"enable_measures": True})
+        from_pass_manager = self.pec._box_circuit(_simple_circuit(), no_gates)
+        self.assertNotEqual(from_pass_manager, pec_default)
 
     def test_enable_gates_injected_when_absent(self):
         """``enable_gates=True`` must be forwarded to ``generate_boxing_pass_manager``
@@ -886,6 +902,68 @@ class TestPECPrepare(unittest.TestCase):
                 quantum_program=program,
             )
 
+    def _pec_pass_manager(self):
+        """Return a boxing pass manager equivalent to the PEC boxing options."""
+        return generate_boxing_pass_manager(
+            enable_gates=True,
+            enable_measures=True,
+            measure_annotations="change_basis",
+            inject_noise_targets="gates",
+            inject_noise_strategy="uniform_modification",
+        )
+
+    def test_prepare_with_pass_manager_matches_equivalent_dict(self):
+        """``prepare`` with a ``PassManager`` equal to the PEC options gives the same gamma as a dict."""
+        qc = _simple_circuit()
+        obs = [SparsePauliOp("ZZ")]
+        noise_map = self._noise_maps_for_circuit(qc)
+        pass_manager = self._pec_pass_manager()
+
+        pec_dict = PEC()
+        pec_dict.prepare(qc, obs, parameters=None, noise_maps=noise_map, noise_gain=0.5)
+        pec_pm = PEC()
+        program = pec_pm.prepare(
+            qc,
+            obs,
+            parameters=None,
+            noise_maps=noise_map,
+            custom_boxing_options=pass_manager,
+            noise_gain=0.5,
+        )
+        self.assertIsInstance(program, QuantumProgram)
+        self.assertIs(pec_pm.custom_boxing_options, pass_manager)
+        self.assertAlmostEqual(pec_pm.gamma, pec_dict.gamma)
+
+    def test_prepare_with_pass_manager_rejects_slc_local_scales(self):
+        """``prepare`` must reject a ``PassManager`` together with ``noise_gain='slc_local_scales'``."""
+        pec = PEC()
+        pec._slc_local_scales = {"ref": np.array([1.0])}
+        pec._slc_reduced_gamma = 1.0
+        with self.assertRaisesRegex(ValueError, "cannot be a PassManager"):
+            pec.prepare(
+                _simple_circuit(),
+                [SparsePauliOp("ZZ")],
+                parameters=None,
+                noise_maps={},
+                custom_boxing_options=self._pec_pass_manager(),
+                noise_gain="slc_local_scales",
+            )
+
+    def test_find_unique_layers_reuses_boxed_circuit_for_same_pass_manager(self):
+        """The saved boxed circuit is reused when the same ``PassManager`` object is given again."""
+        pec = PEC()
+        qc = _simple_circuit()
+        pass_manager = self._pec_pass_manager()
+        pec.prepare(
+            qc,
+            [SparsePauliOp("ZZ")],
+            parameters=None,
+            noise_maps=self._noise_maps_for_circuit(qc),
+            custom_boxing_options=pass_manager,
+        )
+        self.assertIs(pec._get_saved_boxed_circuit(qc, pass_manager), pec.boxed_circuit)
+        self.assertIsNone(pec._get_saved_boxed_circuit(qc, self._pec_pass_manager()))
+
     def test_explicit_noise_gain_float(self):
         """Passing a numeric ``noise_gain`` (not 'auto') must work without error."""
         pec = PEC()
@@ -1187,6 +1265,30 @@ class TestPECSlc(unittest.TestCase):
     """Tests for the shaded light cones (SLC) integration of :class:`PEC`."""
 
     # -- init ---------------------------------------------------------------
+
+    def test_validate_slc_settings_rejects_pass_manager_with_slc(self):
+        """A ``PassManager`` cannot carry the SLC settings, so it is rejected with SLC."""
+        pec = PEC()
+        pec._slc_local_scales = {"ref": np.array([1.0])}
+        pec._slc_reduced_gamma = 1.0
+        pass_manager = generate_boxing_pass_manager(enable_measures=True)
+        with self.assertRaisesRegex(ValueError, "cannot be a PassManager"):
+            pec._validate_slc_settings("slc_local_scales", pass_manager)
+
+    def test_validate_slc_settings_accepts_pass_manager_without_slc(self):
+        """A ``PassManager`` is returned unchanged when SLC is not used."""
+        pass_manager = generate_boxing_pass_manager(enable_measures=True)
+        result = PEC()._validate_slc_settings(0.5, pass_manager)
+        self.assertIs(result, pass_manager)
+
+    @pytest.mark.skipif(not HAS_SLC, reason="qiskit_addon_slc not installed")
+    def test_compute_bounds_rejects_pass_manager(self):
+        """The SLC bounds need the ``inject_noise_strategy`` option, so a ``PassManager`` is rejected."""
+        pass_manager = generate_boxing_pass_manager(enable_measures=True)
+        with self.assertRaisesRegex(ValueError, "cannot be a PassManager"):
+            PEC().generate_slc_bounds_computation_input(
+                _simple_circuit(), custom_boxing_options=pass_manager
+            )
 
     def test_init_slc_attributes_are_none(self):
         """All SLC attributes must be ``None`` on a fresh instance."""

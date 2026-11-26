@@ -31,6 +31,7 @@ from qiskit_mitigation.utils.utils import (
 from qiskit_mitigation.zne.gate_folding import GateFolding
 from qiskit_mitigation.zne.pea import PEA
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult
+from samplomatic.transpiler import generate_boxing_pass_manager
 from samplomatic.utils import find_unique_box_instructions
 
 from ..trim_helpers import eigenstate_circuit, layer_refs
@@ -775,6 +776,45 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
             [self.circuit, self.circuit],
             custom_boxing_options={"enable_measures": True},
             box_types="all",
+        )
+        self.assertTrue(len(layers) > 0)
+
+    def test_single_pass_manager_applies_to_all_circuits(self):
+        """A single ``PassManager`` passed as custom_boxing_options must work for multiple circuits."""
+        pass_manager = generate_boxing_pass_manager(enable_gates=True, enable_measures=True)
+        layers = find_combined_unique_layers(
+            [self.circuit, self.circuit],
+            custom_boxing_options=pass_manager,
+            box_types="all",
+        )
+        self.assertTrue(len(layers) > 0)
+        expected = find_combined_unique_layers(
+            [self.circuit, self.circuit],
+            custom_boxing_options={"enable_gates": True, "enable_measures": True},
+            box_types="all",
+        )
+        self.assertEqual(len(layers), len(expected))
+
+    def test_list_of_pass_managers_and_dicts_per_circuit(self):
+        """A list mixing ``PassManager`` and dict entries (one per circuit) must be accepted."""
+        pass_manager = generate_boxing_pass_manager(enable_gates=True, enable_measures=True)
+        layers = find_combined_unique_layers(
+            [self.circuit, self.circuit],
+            custom_boxing_options=[pass_manager, {"enable_measures": True}],
+            box_types="all",
+        )
+        self.assertTrue(len(layers) > 0)
+
+    def test_pass_manager_with_trex(self):
+        """``PassManager`` options are accepted together with ``trex`` and ``trex_custom_boxing_options``."""
+        pass_manager = generate_boxing_pass_manager(enable_gates=True, enable_measures=True)
+        trex_pass_manager = generate_boxing_pass_manager(enable_measures=True)
+        layers = find_combined_unique_layers(
+            [self.circuit],
+            custom_boxing_options=pass_manager,
+            box_types="measurement",
+            trex=True,
+            trex_custom_boxing_options=trex_pass_manager,
         )
         self.assertTrue(len(layers) > 0)
 

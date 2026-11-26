@@ -32,10 +32,12 @@ from qiskit.primitives import PubResult
 from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliList, SparsePauliOp
+from qiskit.transpiler import PassManager
 from qiskit_mitigation.mitigation_task import MitigationTask
 from qiskit_mitigation.trex import TREX
 from samplomatic import build
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult
+from samplomatic.transpiler import generate_boxing_pass_manager
 from samplomatic.utils import find_unique_box_instructions
 
 from .trim_helpers import TrimMeasurementsTestsMixin, eigenstate_circuit, prepare_task
@@ -255,6 +257,53 @@ class TestBoxCircuit(unittest.TestCase):
     def test_raises_when_enable_measures_is_false(self):
         with self.assertRaises(ValueError):
             self.task._box_circuit(_simple_circuit(), {"enable_measures": False})
+
+    def test_pass_manager_is_used_for_boxing(self):
+        """A ``PassManager`` replaces the one generated from the boxing options."""
+        pass_manager = generate_boxing_pass_manager(
+            enable_gates=True, enable_measures=True, measure_annotations="change_basis"
+        )
+        with patch("qiskit_mitigation.mitigation_task.generate_boxing_pass_manager") as mock_gen:
+            boxed = self.task._box_circuit(_simple_circuit(), pass_manager)
+        mock_gen.assert_not_called()
+        self.assertTrue(any(inst.operation.name == "box" for inst in boxed.data))
+        self.assertIn("_meas", [r.name for r in boxed.cregs])
+
+    def test_pass_manager_ignores_boxing_options_and_is_not_validated(self):
+        """Boxing options are not used when a ``PassManager`` is given, so their checks do not apply."""
+        pass_manager = generate_boxing_pass_manager(enable_gates=True, enable_measures=True)
+        boxed = self.task._box_circuit(_simple_circuit(), pass_manager)
+        self.assertIsInstance(boxed, QuantumCircuit)
+
+    def test_pass_manager_output_matches_equivalent_options(self):
+        """A ``PassManager`` built with the same options as a dict gives the same boxed circuit."""
+        options = {"enable_measures": True, "measure_annotations": "change_basis"}
+        from_dict = self.task._box_circuit(_simple_circuit(), dict(options))
+        from_pass_manager = self.task._box_circuit(
+            _simple_circuit(), generate_boxing_pass_manager(**options)
+        )
+        self.assertEqual(
+            [inst.operation.name for inst in from_dict.data],
+            [inst.operation.name for inst in from_pass_manager.data],
+        )
+
+    def test_prepare_uses_pass_manager_end_to_end(self):
+        """``prepare`` with a ``PassManager`` builds a quantum program."""
+        pass_manager = generate_boxing_pass_manager(
+            enable_gates=True, enable_measures=True, measure_annotations="change_basis"
+        )
+        task = MitigationTask()
+        program = task.prepare(
+            _simple_circuit(),
+            SparsePauliOp("ZZ"),
+            None,
+            custom_boxing_options=pass_manager,
+            shots_per_randomization=8,
+            num_randomizations=2,
+        )
+        self.assertIsInstance(program, QuantumProgram)
+        self.assertIsInstance(task.custom_boxing_options, PassManager)
+        self.assertTrue(any(inst.operation.name == "box" for inst in task.boxed_circuit.data))
 
     def test_existing_measurements_removed_before_boxing(self):
         """A circuit with pre-existing measurements should not cause double-measure issues."""

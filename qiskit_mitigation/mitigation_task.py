@@ -29,6 +29,7 @@ from qiskit.primitives import DataBin, PubResult
 from qiskit.primitives.containers.bindings_array import BindingsArray
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, PauliList, SparsePauliOp
+from qiskit.transpiler import PassManager
 from samplomatic import ChangeBasis, build
 from samplomatic.quantum_program import (
     QuantumProgram,
@@ -112,7 +113,7 @@ class MitigationTask:
         self.meas_bases: list[Pauli] | None = None
         self.meas_qubits: list[int] | None = None
         self.circuit_num_qubits: int | None = None
-        self.custom_boxing_options: dict = None
+        self.custom_boxing_options: dict | PassManager = None
         self.shots_per_randomization: int = None
         self.num_randomizations: int = None
         self.trex: TREX | None = None
@@ -122,7 +123,7 @@ class MitigationTask:
     def _box_circuit(
         cls,
         circuit: QuantumCircuit,
-        boxing_options: dict | None,
+        boxing_options: dict | PassManager | None,
         meas_qubits: Sequence[int] | None = None,
     ) -> QuantumCircuit:
         """Group the operations in the given ``circuit`` into boxes.
@@ -136,7 +137,8 @@ class MitigationTask:
         Args:
             circuit: The circuit to group into boxes.
             boxing_options: Dictionary of :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` options.
-                If ``None``, default boxing options are used.
+                If ``None``, default boxing options are used. If a :class:`~qiskit.transpiler.PassManager`
+                is given, it is used to box the circuit instead, and the boxing options are not used.
             meas_qubits: Circuit qubit indices to measure. Only these qubits get a classical bit in
                 the ``_meas`` register. The caller is responsible for the set being sufficient (see
                 :func:`~qiskit_mitigation.utils.meas_qubits.derive_meas_qubits`). If ``None``, all
@@ -149,19 +151,28 @@ class MitigationTask:
             ValueError: If ``boxing_options["enable_measures"]`` is False.
             ValueError: If the boxing pass manager fails to run.
         """
-        if boxing_options is None:
-            boxing_options = {}
-        edited_boxing_options = boxing_options.copy()
-        if "enable_measures" not in edited_boxing_options:
-            edited_boxing_options["enable_measures"] = True
-            edited_boxing_options["measure_annotations"] = "change_basis"
-        elif not edited_boxing_options["enable_measures"]:
-            raise ValueError('boxing_options["enable_measures"] may not be False.')
-        if (
-            "measure_annotations" in edited_boxing_options
-            and edited_boxing_options["measure_annotations"] == "twirl"
-        ):
-            edited_boxing_options["measure_annotations"] = "all"
+        if isinstance(boxing_options, PassManager):
+            boxing_pass_manager = boxing_options
+        else:
+            if boxing_options is None:
+                boxing_options = {}
+            edited_boxing_options = boxing_options.copy()
+            if "enable_measures" not in edited_boxing_options:
+                edited_boxing_options["enable_measures"] = True
+                edited_boxing_options["measure_annotations"] = "change_basis"
+            elif not edited_boxing_options["enable_measures"]:
+                raise ValueError('boxing_options["enable_measures"] may not be False.')
+            if (
+                "measure_annotations" in edited_boxing_options
+                and edited_boxing_options["measure_annotations"] == "twirl"
+            ):
+                edited_boxing_options["measure_annotations"] = "all"
+            try:
+                boxing_pass_manager = generate_boxing_pass_manager(**edited_boxing_options)
+            except Exception as ex:
+                raise ValueError(
+                    f"Failed to generate boxing pass manager with the following error, {ex}"
+                ) from ex
 
         # Determine which qubits to measure
         if meas_qubits is None:
@@ -178,13 +189,7 @@ class MitigationTask:
         circuit.barrier()
         circuit.measure(qubits_to_measure, creg)
 
-        try:
-            boxing_pm = generate_boxing_pass_manager(**edited_boxing_options)
-        except Exception as ex:
-            raise ValueError(
-                f"Failed to generate boxing pass manager with the following error, {ex}"
-            ) from ex
-        boxed_circuit = boxing_pm.run(circuit)
+        boxed_circuit = boxing_pass_manager.run(circuit)
         return boxed_circuit
 
     @classmethod
@@ -469,7 +474,7 @@ class MitigationTask:
         circuit: QuantumCircuit,
         observables: ObservablesArray | Sequence[SparsePauliOp],
         parameters: np.ndarray | BindingsArray | None,
-        custom_boxing_options: dict | None,
+        custom_boxing_options: dict | PassManager | None,
         shots_per_randomization: int,
         num_randomizations: int,
         broadcast_obs_and_params: bool,
@@ -529,9 +534,12 @@ class MitigationTask:
                 "shots_per_randomization must be equal to number of shots of the quantum program."
             )
 
-        custom_boxing_options = (
-            {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
-        )
+        # A boxing pass manager is kept as given, so that passing the same pass manager again
+        # lets the saved boxed circuit be reused (see ``_get_saved_boxed_circuit``).
+        if custom_boxing_options is None:
+            custom_boxing_options = {}
+        elif not isinstance(custom_boxing_options, PassManager):
+            custom_boxing_options = copy.deepcopy(custom_boxing_options)
         self.custom_boxing_options = custom_boxing_options
         self.num_randomizations = num_randomizations
         self.shots_per_randomization = shots_per_randomization
@@ -598,7 +606,7 @@ class MitigationTask:
         return False
 
     def _get_saved_boxed_circuit(
-        self, circuit: QuantumCircuit, custom_boxing_options: dict | None
+        self, circuit: QuantumCircuit, custom_boxing_options: dict | PassManager | None
     ) -> QuantumCircuit | None:
         """Return the boxed circuit saved in the instance if it can be used instead of boxing ``circuit`` again.
 
@@ -650,7 +658,7 @@ class MitigationTask:
     def find_unique_layers(
         self,
         circuit: QuantumCircuit,
-        custom_boxing_options: dict | None = None,
+        custom_boxing_options: dict | PassManager | None = None,
         box_types: Literal["gates", "measurement", "all"] = "all",
         observables: ObservablesArray | Sequence[SparsePauliOp] | None = None,
         trex: bool | None = None,
@@ -721,7 +729,7 @@ class MitigationTask:
         circuit: QuantumCircuit,
         observables: ObservablesArray | Sequence[SparsePauliOp],
         parameters: np.ndarray | BindingsArray | None,
-        custom_boxing_options: dict | None = None,
+        custom_boxing_options: dict | PassManager | None = None,
         shots_per_randomization: int = 64,
         num_randomizations: int = 128,
         broadcast_obs_and_params: bool = False,
@@ -748,6 +756,14 @@ class MitigationTask:
             observables: The observables to calculate their expectation values.
             parameters: The parameters of a parametric circuit.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+                Alternatively, a :class:`~qiskit.transpiler.PassManager` can be given to box the circuit with it.
+                In this case, it replaces the pass manager generated by
+                :meth:`~samplomatic.transpiler.generate_boxing_pass_manager`, and the boxing options are not used.
+
+                .. warning::
+                    Use with caution. The annotations of the boxes define important details of the way
+                    the final executed circuit is created, so the boxes produced by a custom pass manager
+                    must be consistent with the mitigation method and the rest of the workflow.
             shots_per_randomization: The number of shots per randomization.
             num_randomizations: The number of randomizations.
             broadcast_obs_and_params: Whether to broadcast observables and parameters.

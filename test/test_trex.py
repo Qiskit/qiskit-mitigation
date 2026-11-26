@@ -25,6 +25,7 @@ from qiskit_mitigation import MitigationTask
 from qiskit_mitigation.trex import TREX
 from samplomatic import build
 from samplomatic.quantum_program import QuantumProgram, QuantumProgramResult, SamplexItem
+from samplomatic.transpiler import generate_boxing_pass_manager
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -122,6 +123,12 @@ class TestEditBoxingOptions(unittest.TestCase):
 
     def setUp(self):
         self.trex = TREX()
+
+    def test_pass_manager_is_returned_unchanged(self):
+        """A ``PassManager`` is returned as is, since it replaces the boxing options."""
+        pass_manager = generate_boxing_pass_manager(enable_measures=True)
+        result = self.trex._edit_boxing_options(pass_manager)
+        self.assertIs(result, pass_manager)
 
     def test_none_options_returns_defaults(self):
         """``None`` boxing_options must return default TREX options."""
@@ -694,6 +701,12 @@ class TestTREXBoxCircuit(unittest.TestCase):
     def setUp(self):
         self.trex = TREX()
         self.circuit = _simple_circuit()
+
+    def test_pass_manager_is_used_for_boxing(self):
+        """A ``PassManager`` boxes the circuit as is, without the TREX option checks."""
+        pass_manager = generate_boxing_pass_manager(enable_measures=True)
+        result = self.trex._box_circuit(self.circuit, pass_manager)
+        self.assertTrue(any(inst.operation.name == "box" for inst in result.data))
 
     # --- happy path ---
 

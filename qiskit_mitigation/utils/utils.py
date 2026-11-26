@@ -22,6 +22,7 @@ from qiskit import QuantumCircuit
 from qiskit.circuit import CircuitInstruction
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import SparsePauliOp
+from qiskit.transpiler import PassManager
 from samplomatic.quantum_program import QuantumProgramResult
 from samplomatic.utils import find_unique_box_instructions
 
@@ -102,11 +103,11 @@ def load_tasks_from_result(
 def find_combined_unique_layers(
     circuits: list[QuantumCircuit],
     mitigation_types: list[MitigationTask] | None = None,
-    custom_boxing_options: dict | list[dict] | None = None,
+    custom_boxing_options: dict | PassManager | list[dict | PassManager] | None = None,
     box_types: Literal["gates", "measurement", "all"] = "all",
     observables: Sequence[ObservablesArray | Sequence[SparsePauliOp]] | None = None,
     trex: bool = False,
-    trex_custom_boxing_options: dict | None = None,
+    trex_custom_boxing_options: dict | PassManager | None = None,
 ) -> list[CircuitInstruction]:
     """Return the unique boxed layers found across the given circuits using the given boxing options.
 
@@ -126,7 +127,8 @@ def find_combined_unique_layers(
         mitigation_types: List of initiated mitigation classes that the circuits will be mitigated with. Each mitigation method might enforce boxing options that will affect the unique layers.
             If given, the list must be the same length as ``circuits``.
         custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function to find the unique layers.
-            If a single dict is given, the same custom boxing option will be used for all tasks. If ``None`` is given, the default boxing option will be used.
+            If a single dict is given, the same custom boxing option will be used for all tasks. If a :class:`~qiskit.transpiler.PassManager` is given, it is used to box the circuits instead.
+            If ``None`` is given, the default boxing option will be used.
         box_types: Can be either ``"gates"``, ``"measurement"`` or ``"all"``, corresponding to filter boxes with only gate layers, only measurement layers or all layers, respectively.
         observables: If given, one entry (an observables array or a sequence of observables) per
             circuit. The layers are then found for circuits whose measurements are trimmed to the
@@ -191,10 +193,10 @@ def find_combined_unique_layers(
             stacklevel=2,
         )
 
-    boxing_options_list: list[dict | None]
+    boxing_options_list: list[dict | PassManager | None]
     if custom_boxing_options is None:
         boxing_options_list = [None] * len(circuits)
-    elif isinstance(custom_boxing_options, dict):
+    elif isinstance(custom_boxing_options, dict | PassManager):
         boxing_options_list = [custom_boxing_options] * len(circuits)
     else:
         boxing_options_list = list(custom_boxing_options)
