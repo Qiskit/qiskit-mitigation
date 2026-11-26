@@ -121,7 +121,8 @@ class TREX:
         qubits of its circuit. The classical register of the measurement is named ``_meas`` and has
         ``m + 1`` bits, where ``m`` is the largest measured qubit index, so that column ``i`` of the
         calibration is always circuit qubit ``i``. Columns of qubits that no task measures are not
-        measured and always hold zeros.
+        measured and always hold zeros. The quantum register of the calibration circuit has as many
+        qubits as the widest circuit of the tasks.
 
         The calibration item is built without noise maps, so if ``custom_boxing_options`` sets
         ``inject_noise_targets`` to ``"all"`` or ``"measures"``, it is replaced with ``"none"`` in
@@ -139,11 +140,11 @@ class TREX:
             raise ValueError(
                 "A TREX must be connected to at least one mitigation task to create a calibration task."
             )
-        cal_qubits = self._calibration_qubits(
-            [task.circuit for task in self.tasks], [task.meas_qubits for task in self.tasks]
-        )
+        circuits = [task.circuit for task in self.tasks]
+        cal_qubits = self._calibration_qubits(circuits, [task.meas_qubits for task in self.tasks])
+
         boxed_circuit = self._prepare_calibration_circuit(
-            max(cal_qubits) + 1,
+            max(circuit.num_qubits for circuit in circuits),
             custom_boxing_options,
             cal_qubits,
             disable_measure_noise_injection=True,
@@ -274,9 +275,9 @@ class TREX:
     ) -> QuantumCircuit:
         """Creates a boxed TREX calibration circuit.
 
-        The calibration circuit has ``num_qubits`` qubits and a ``_meas`` register of the same
-        size, in which qubit ``i`` is measured into bit ``i``. The boxed calibration circuit is
-        saved in ``self.boxed_circuit``.
+        The calibration circuit has ``num_qubits`` qubits and a ``_meas`` register with a size of
+        ``max(meas_qubits) + 1`` (``num_qubits`` bits if ``meas_qubits`` is ``None``), in which qubit ``i`` is measured
+        into bit ``i``. The boxed calibration circuit is saved in ``self.boxed_circuit``.
 
         Args:
             num_qubits: The number of qubits of the calibration circuit.
@@ -289,7 +290,8 @@ class TREX:
         Returns:
             The boxed calibration circuit for TREX factors calculation.
         """
-        classical_cal_reg = ClassicalRegister(num_qubits, name="_meas")
+        num_bits = num_qubits if meas_qubits is None else max(meas_qubits) + 1
+        classical_cal_reg = ClassicalRegister(num_bits, name="_meas")
         trex_circuit = QuantumCircuit(num_qubits)
         trex_circuit.add_register(classical_cal_reg)
         if meas_qubits is None:
