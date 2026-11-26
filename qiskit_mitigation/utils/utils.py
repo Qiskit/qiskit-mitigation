@@ -107,7 +107,7 @@ def find_combined_unique_layers(
     box_types: Literal["gates", "measurement", "all"] = "all",
     observables: Sequence[ObservablesArray | Sequence[SparsePauliOp]] | None = None,
     trex: bool = False,
-    trex_custom_boxing_options: dict | None = None,
+    trex_custom_boxing_options: dict | PassManager | None = None,
 ) -> list[CircuitInstruction]:
     """Return the unique boxed layers found across the given circuits using the given boxing options.
 

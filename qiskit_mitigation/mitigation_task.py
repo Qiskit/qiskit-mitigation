@@ -534,9 +534,12 @@ class MitigationTask:
                 "shots_per_randomization must be equal to number of shots of the quantum program."
             )
 
-        custom_boxing_options = (
-            {} if custom_boxing_options is None else copy.deepcopy(custom_boxing_options)
-        )
+        # A boxing pass manager is kept as given, so that passing the same pass manager again
+        # lets the saved boxed circuit be reused (see ``_get_saved_boxed_circuit``).
+        if custom_boxing_options is None:
+            custom_boxing_options = {}
+        elif not isinstance(custom_boxing_options, PassManager):
+            custom_boxing_options = copy.deepcopy(custom_boxing_options)
         self.custom_boxing_options = custom_boxing_options
         self.num_randomizations = num_randomizations
         self.shots_per_randomization = shots_per_randomization

@@ -142,7 +142,6 @@ class PEC(MitigationTask):
                 ``boxing_options["inject_noise_targets"]`` not in ["gates", "all"],
                 ``boxing_options["inject_noise_strategy"]``is "no_modification".
             ValueError: If the boxing pass manager fails to run.
-        `
         """
         if isinstance(boxing_options, PassManager):
             return super()._box_circuit(circuit, boxing_options, meas_qubits)

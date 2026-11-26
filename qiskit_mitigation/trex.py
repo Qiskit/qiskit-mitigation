@@ -277,7 +277,7 @@ class TREX:
     def _prepare_calibration_circuit(
         self,
         num_qubits: int,
-        custom_boxing_options: dict | None = None,
+        custom_boxing_options: dict | PassManager | None = None,
         meas_qubits: Sequence[int] | None = None,
         disable_measure_noise_injection: bool = False,
     ) -> QuantumCircuit:
@@ -290,6 +290,8 @@ class TREX:
         Args:
             num_qubits: The number of qubits of the calibration circuit.
             custom_boxing_options: The custom boxing options that will be used by :meth:`~samplomatic.transpiler.generate_boxing_pass_manager` function.
+                If a :class:`~qiskit.transpiler.PassManager` is given, it is used to box the circuit
+                instead, and the boxing options are not used.
             meas_qubits: The qubits to measure. Bits of the other qubits are not written. If
                 ``None``, all the ``num_qubits`` qubits are measured.
             disable_measure_noise_injection: Whether to disable noise injection in the measurement

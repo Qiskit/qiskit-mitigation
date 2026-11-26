@@ -902,6 +902,68 @@ class TestPECPrepare(unittest.TestCase):
                 quantum_program=program,
             )
 
+    def _pec_pass_manager(self):
+        """Return a boxing pass manager equivalent to the PEC boxing options."""
+        return generate_boxing_pass_manager(
+            enable_gates=True,
+            enable_measures=True,
+            measure_annotations="change_basis",
+            inject_noise_targets="gates",
+            inject_noise_strategy="uniform_modification",
+        )
+
+    def test_prepare_with_pass_manager_matches_equivalent_dict(self):
+        """``prepare`` with a ``PassManager`` equal to the PEC options gives the same gamma as a dict."""
+        qc = _simple_circuit()
+        obs = [SparsePauliOp("ZZ")]
+        noise_map = self._noise_maps_for_circuit(qc)
+        pass_manager = self._pec_pass_manager()
+
+        pec_dict = PEC()
+        pec_dict.prepare(qc, obs, parameters=None, noise_maps=noise_map, noise_gain=0.5)
+        pec_pm = PEC()
+        program = pec_pm.prepare(
+            qc,
+            obs,
+            parameters=None,
+            noise_maps=noise_map,
+            custom_boxing_options=pass_manager,
+            noise_gain=0.5,
+        )
+        self.assertIsInstance(program, QuantumProgram)
+        self.assertIs(pec_pm.custom_boxing_options, pass_manager)
+        self.assertAlmostEqual(pec_pm.gamma, pec_dict.gamma)
+
+    def test_prepare_with_pass_manager_rejects_slc_local_scales(self):
+        """``prepare`` must reject a ``PassManager`` together with ``noise_gain='slc_local_scales'``."""
+        pec = PEC()
+        pec._slc_local_scales = {"ref": np.array([1.0])}
+        pec._slc_reduced_gamma = 1.0
+        with self.assertRaisesRegex(ValueError, "cannot be a PassManager"):
+            pec.prepare(
+                _simple_circuit(),
+                [SparsePauliOp("ZZ")],
+                parameters=None,
+                noise_maps={},
+                custom_boxing_options=self._pec_pass_manager(),
+                noise_gain="slc_local_scales",
+            )
+
+    def test_find_unique_layers_reuses_boxed_circuit_for_same_pass_manager(self):
+        """The saved boxed circuit is reused when the same ``PassManager`` object is given again."""
+        pec = PEC()
+        qc = _simple_circuit()
+        pass_manager = self._pec_pass_manager()
+        pec.prepare(
+            qc,
+            [SparsePauliOp("ZZ")],
+            parameters=None,
+            noise_maps=self._noise_maps_for_circuit(qc),
+            custom_boxing_options=pass_manager,
+        )
+        self.assertIs(pec._get_saved_boxed_circuit(qc, pass_manager), pec.boxed_circuit)
+        self.assertIsNone(pec._get_saved_boxed_circuit(qc, self._pec_pass_manager()))
+
     def test_explicit_noise_gain_float(self):
         """Passing a numeric ``noise_gain`` (not 'auto') must work without error."""
         pec = PEC()
