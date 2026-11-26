@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 import numpy as np
@@ -27,7 +27,7 @@ from .constants import DEFAULT_POST_CHECK_SUFFIX, DEFAULT_PRE_CHECK_SUFFIX
 from .post_selection_summary import PostSelectionSummary
 
 
-class PostSelectionStrategy(str, Enum):
+class PostSelectionStrategy(StrEnum):
     """The supported postselection strategies."""
 
     NODE = "node"

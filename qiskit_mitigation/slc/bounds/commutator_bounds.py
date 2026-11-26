@@ -1,0 +1,345 @@
+# This code is a Qiskit project.
+#
+# (C) Copyright IBM 2025.
+#
+# This code is licensed under the Apache License, Version 2.0. You may
+# obtain a copy of this license in the LICENSE.txt file in the root directory
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+#
+# Any modifications or derivative works of this code must retain this
+# copyright notice, and modified files need to carry a notice indicating
+# that they have been altered from the originals.
+
+# Warning: this module is not documented and it does not have an RST file.
+# If we ever publicly expose interfaces users can import from this module,
+# we should set up its RST file.
+
+"""Unequal time commutator bounds."""
+
+from __future__ import annotations
+
+import logging
+import multiprocessing as mp
+import os
+import threading
+import time
+from collections import Counter
+from collections.abc import Callable
+from functools import partial
+from typing import NamedTuple
+
+import numpy as np
+from pauli_prop.propagation import (
+    KNOWN_CLIFFS,
+    RotationGates,
+)
+from qiskit import QuantumCircuit
+from qiskit.circuit import Barrier, CircuitInstruction
+from qiskit.quantum_info import (
+    Clifford,
+    Pauli,
+    PauliLindbladMap,
+    QubitSparsePauliList,
+    SparsePauliOp,
+)
+
+from .. import globals as slc_globals
+from ..utils import find_indices, iter_circuit
+from .light_cone import LightCone
+
+Bounds = dict[str, PauliLindbladMap]
+
+LOGGER = logging.getLogger(__name__)
+
+# The default cap on the number of operator terms tracked during a Pauli evolution.
+#
+# This must stay a realistic number rather than something nominally "unlimited" such as
+# ``np.iinfo(np.uint).max``: :func:`~pauli_prop.propagation.propagate_through_rotation_gates` treats
+# the cap as a *capacity* and pre-allocates it, so a value of that size asks the allocator for
+# terabytes and aborts the process rather than raising.
+_DEFAULT_EVOLUTION_MAX_TERMS: int = 1_000_000
+
+
+def _forbid_qiskit_parallelism() -> None:
+    """Makes Qiskit's Rust code run serially in a worker process.
+
+    Qiskit runs some of its Rust routines, such as :meth:`.SparsePauliOp.to_matrix`, on a global
+    ``rayon`` thread pool, which is started the first time one of them is called. A worker forked
+    from a process that has already started that pool inherits the pool's state but none of its
+    threads, so the first such call in the worker waits forever for threads that do not exist.
+
+    This is the same guard :func:`qiskit.utils.parallel_map` installs in its own workers: it tells
+    Qiskit that it is already running in parallel, so the Rust code does not reach for the pool.
+    """
+    os.environ["QISKIT_IN_PARALLEL"] = "TRUE"
+
+
+class CommutatorBounds(NamedTuple):
+    """A dataclass to store metadata about the computed commutator bounds."""
+
+    commutator_bound: float
+    """The bound on the commutator.
+
+    This bound will be computed in different means depending on the application. For example,
+    backward bounds will compute the nuclear norm (Schatten 1-norm) while forward bounds are
+    typically computed using the spectral norm (Schatten infinity-norm).
+
+    If the norm computation exceeds specified difficulty limits, it will be abandoned in favor of a
+    simpler bound based on the triangle inequality, which is indicated by
+    :attr:`fallback_to_tri_ineq` being set to ``True``.
+
+    This value may be ``NaN`` when the computation of the commutor bound was aborted. This can
+    happen when the :attr:`truncation_bias` already exceeds the theoretical bound of ``2.0``.
+    """
+
+    truncation_bias: float
+    """The bias on the bound due to truncation of the commutator."""
+
+    fallback_to_tri_ineq: bool
+    """Whether :attr:`commutator_bound` was computed "loosely" using a simple triangle inequality.
+    """
+    # TODO: document the triangle inequality that is being used here
+
+    def min(self) -> float:
+        """Returns the minimum bound encoded by this metadata.
+
+        The minimal bound is the smaller of the sum of :attr:`commutator_bound` and
+        :attr:`truncation_bias` or the theoretical bound of ``2.0``.
+
+        The value of ``2.0`` is used because a Pauli observable bounded on the range
+        ``[-1, +1]`` cannot be biased by more than ``2.0``.
+        """
+        return float(np.nanmin((self.commutator_bound + self.truncation_bias, 2.0)))
+
+
+def compute_bounds(
+    circuit: QuantumCircuit,
+    noise_model_paulis: dict[str, QubitSparsePauliList],
+    light_cone: LightCone,
+    norm_fn: Callable[[Pauli, RotationGates], CommutatorBounds],
+    *,
+    backwards: bool,
+    max_num_boxes: int | None = None,
+    num_processes: int = 1,
+    timeout: float | None = None,
+) -> Bounds:
+    """Computes the unequal time commutator bounds.
+
+    Given a circuit with :class:`.BoxOp` instructions with :class:`.InjectNoise` annotations and a
+    mapping of noise model identifiers (:attr:`.InjectNoise.ref`) to list of Pauli error terms
+    (``noise_model_paulis``), this function computes the unequal time commutator bounds (the details
+    of which are implemented by ``norm_fn``). In doing so, it only considers gates that lie within
+    the light-cone of the observable (initialized by ``light_cone``). These computed bounds form the
+    basis of the shaded light-cone.
+
+    .. important::
+      The computed bounds are keyed by ``InjectNoise.modifier_ref``, so every
+      :class:`.BoxOp` with an :class:`.InjectNoise` annotation **must** have a unique
+      ``modifier_ref``. Boxing a circuit with
+      :func:`~samplomatic.transpiler.generate_boxing_pass_manager` provides this only with
+      ``inject_noise_strategy="individual_modification"``. With any other strategy, several boxes
+      share a ``modifier_ref``, which leads to silently wrong forward bounds or a backward
+      computation that never finishes.
+
+    Since this function performs a long-running computation, it gracefully handles
+    ``KeyboardInterrupt`` exceptions, allowing the user to interrupt the computation at an arbitrary
+    point in time and still obtain the results that have been computed up to that point.
+
+    Args:
+        circuit: the target circuit.
+        noise_model_paulis: the Pauli error terms to consider for each noise model.
+        light_cone: the initialized and stateful :class:`.LightCone` tracker.
+        norm_fn: the function implementing the specific unequal time commutator. It gets called
+            as ``norm_fn(pauli, gates)`` for every Pauli error term, where ``gates`` are the
+            non-Clifford gates within the light-cone that the error term must be evolved through.
+        backwards: whether to iterate over the ``circuit`` in reverse.
+        max_num_boxes: the maximum number of boxes for which to compute bounds. Bounds for any
+            additional boxes will be given the trivial upper bound value of :math:`2.0`.
+        num_processes: the number of parallel processes to use.
+        timeout: an optional timeout (in seconds) after which all remaining layers are filled with
+            trivial numerical bounds of ``2.0``. Note, that this is not a strict timeout and the
+            layer being processed at the time of reaching this timeout will complete normally.
+
+    Returns:
+        The computed unequal time commutator bounds.
+    """
+    LOGGER.debug(f"Using {num_processes} processes")
+
+    net_clifford = Clifford.from_label("I" * circuit.num_qubits)
+    rot_gates = RotationGates([], [], [])
+
+    def _handle_circuit_instruction(instruction: CircuitInstruction) -> None:
+        """Handles a circuit instruction.
+
+        1. If the instruction commutes with the current light-cone, do nothing. Note, that calling
+           ``light_cone.commutes`` will append the provided instruction to the stateful
+           ``light_cone`` object!
+        2. Find ``qargs`` which are the indices of the instruction's qubits in the context of the
+           global circuit from which this instruction stems.
+        3. If the gate is Clifford, update our global ``net_clifford``, effectively accumulating all
+           Clifford gates at the beginning of the circuit.
+        4. If the gate is *not* Clifford, append it to our global ``rot_gates`` under which our
+           Pauli terms are later going to be evolved. When doing so, we provide ``net_clifford`` to
+           ensure the rotation gate gets moved through it, ensuring the ``net_clifford`` remains at
+           the beginning of the circuit.
+        """
+        nonlocal light_cone
+        nonlocal circuit
+        nonlocal net_clifford
+        nonlocal rot_gates
+
+        if light_cone.commutes(instruction):
+            return
+
+        qargs = find_indices(circuit, instruction)
+
+        if isinstance(instruction.operation, Barrier):
+            LOGGER.debug(f"Ignoring instruction of type '{type(instruction.operation)}'")
+        elif instruction.name in KNOWN_CLIFFS:
+            net_clifford = net_clifford.dot(instruction.operation, qargs)
+        else:
+            rot_gates.append_circuit_instruction(
+                instruction, qargs, circuit.num_qubits, clifford=net_clifford
+            )
+
+    gathered_bounds: dict[str, tuple[np.ndarray, QubitSparsePauliList]] = {}
+
+    def _insert_rate(bound: CommutatorBounds, box_id: str, rate_idx: int) -> None:
+        nonlocal gathered_bounds
+
+        gathered_bounds[box_id][0][rate_idx] = bound.min()
+
+    failures: list[BaseException] = []
+    # NOTE: the pool calls _record_failure from two threads: the one handling the results of the
+    # tasks, and the one sending the tasks to the workers (if sending a task fails)
+    failures_lock = threading.Lock()
+
+    def _record_failure(exc: BaseException, box_id: str, rate_idx: int) -> None:
+        """Records a task that raised an exception, leaving the trivial bound for its error term.
+
+        Every failure gets recorded, but only the first one gets logged on its own, together with its
+        traceback, since all others are likely to share the same cause. Once the computation has
+        finished, a single warning summarizes all recorded failures.
+        """
+        nonlocal failures
+
+        with failures_lock:
+            is_first = not failures
+            failures.append(exc)
+        if is_first:
+            # NOTE: the exception's cause holds the traceback from within the worker process
+            LOGGER.warning(
+                f"Computing the bound of error term {rate_idx} of box '{box_id}' failed. Its error "
+                "term keeps the trivial bound of 2.0, as does that of any other failing task.",
+                exc_info=exc,
+            )
+
+    pool = mp.Pool(num_processes, initializer=_forbid_qiskit_parallelism)
+    tasks = set()
+
+    start = time.time()
+    LOGGER.debug("Starting to spawn bound computation tasks")
+
+    encountered_num_boxes = 0
+
+    for circ_inst, qargs, box_id, noise_id in iter_circuit(circuit, reverse=True):
+        if box_id is None:
+            _handle_circuit_instruction(circ_inst)
+            continue
+
+        # NOTE: we know for a fact that noise_id can only be None when box_id is None
+        assert noise_id is not None
+
+        noise_terms: QubitSparsePauliList = noise_model_paulis[noise_id]
+        # pre-populate computed bounds with trivial upper bound
+        gathered_bounds[box_id] = (np.full(len(noise_terms), 2.0), noise_terms)
+
+        encountered_num_boxes += 1
+        if max_num_boxes is not None and encountered_num_boxes > max_num_boxes:
+            # skipping actual bound computation and limiting bound estimate to trivial value
+            continue
+
+        if backwards:
+            # NOTE: we unroll the BoxOp immediately to allow gates contained within the box be
+            # pruned by the LightCone pass
+            for inst in circ_inst.operation.body[::-1]:
+                _handle_circuit_instruction(inst)
+
+        # Ensure that the noise model Pauli terms are defined on the entire width of the circuit.
+        local_noise_terms = noise_terms.apply_layout(qargs, num_qubits=circuit.num_qubits)
+        # NOTE: both FIXMEs below can be resolved by simply implementing QubitSparsePauliList.evolve
+        local_noise_terms = QubitSparsePauliList.from_sparse_list(
+            [
+                tuple(parts)
+                # FIXME: we convert temporarily to SparsePauliOp to leverage its to_sparse_list
+                for *parts, _ in SparsePauliOp(
+                    # FIXME: we convert temporarily to PauliList to leverage its evolve
+                    local_noise_terms.to_pauli_list().evolve(net_clifford, frame="s")
+                ).to_sparse_list()
+            ],
+            circuit.num_qubits,
+        )
+
+        gates = RotationGates(rot_gates.gates[::-1], rot_gates.qargs[::-1], rot_gates.thetas[::-1])
+
+        for pauli_idx, pauli in enumerate(local_noise_terms.to_pauli_list()):
+            task = pool.apply_async(
+                norm_fn,
+                [pauli, gates],
+                callback=partial(_insert_rate, box_id=box_id, rate_idx=pauli_idx),
+                error_callback=partial(_record_failure, box_id=box_id, rate_idx=pauli_idx),
+            )
+            tasks.add(task)
+
+        if not backwards:
+            # NOTE: we unroll the BoxOp immediately to allow gates contained within the box be
+            # pruned by the LightCone pass
+            for inst in circ_inst.operation.body[::-1]:
+                _handle_circuit_instruction(inst)
+
+    total_num_tasks = len(tasks)
+    LOGGER.debug(f"Total number of spawned tasks: {total_num_tasks}")
+
+    len_progress_indicator = 50
+    per_progress_char = total_num_tasks / len_progress_indicator
+
+    try:
+        while tasks:
+            next(iter(tasks)).wait(slc_globals.PROGRESS_POLLING_PERIOD)
+            tasks = {t for t in tasks if not t.ready()}
+            completed = total_num_tasks - len(tasks)
+            perc = (completed / total_num_tasks) * 100
+            progress = "." * int(completed / per_progress_char)
+            LOGGER.info(
+                f"Progress: {progress:{len_progress_indicator}} "
+                f"[{completed}/{total_num_tasks}] {perc:.1f}%"
+            )
+            if timeout is not None and (time.time() - start) > timeout:
+                LOGGER.warning(f"Reached user-specified time out of {timeout} seconds!")
+                pool.terminate()
+                break
+        else:
+            pool.close()
+    except KeyboardInterrupt:
+        LOGGER.warning("Caught KeyboardInterrupt! Terminating pending bound computations.")
+        pool.terminate()
+
+    tasks = {t for t in tasks if not t.ready()}
+    completed = total_num_tasks - len(tasks)
+
+    pool.join()
+
+    LOGGER.info(f"Successfully completed [{completed - len(failures)}/{total_num_tasks}] tasks!")
+    if failures:
+        failure_types = Counter(type(exc).__name__ for exc in failures)
+        LOGGER.warning(
+            f"[{len(failures)}/{total_num_tasks}] tasks failed and their error terms kept the "
+            "trivial bound of 2.0: "
+            + ", ".join(f"{count} x {name}" for name, count in failure_types.most_common())
+        )
+
+    comm_norms: Bounds = {
+        box_id: PauliLindbladMap.from_components(bounds[0], bounds[1])
+        for box_id, bounds in gathered_bounds.items()
+    }
+    return comm_norms

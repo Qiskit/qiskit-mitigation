@@ -1,0 +1,178 @@
+# This code is a Qiskit project.
+#
+# (C) Copyright IBM 2025.
+#
+# This code is licensed under the Apache License, Version 2.0. You may
+# obtain a copy of this license in the LICENSE.txt file in the root directory
+# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
+#
+# Any modifications or derivative works of this code must retain this
+# copyright notice, and modified files need to carry a notice indicating
+# that they have been altered from the originals.
+
+# Warning: this module is not documented and it does not have an RST file.
+# If we ever publicly expose interfaces users can import from this module,
+# we should set up its RST file.
+
+"""A stateful light-cone data structure."""
+
+from __future__ import annotations
+
+import logging
+from typing import NamedTuple, Self
+
+import numpy as np
+from qiskit import QuantumCircuit
+from qiskit.circuit import CircuitInstruction, Gate, Qubit
+from qiskit.circuit.commutation_library import SessionCommutationChecker as scc
+from qiskit.circuit.library import PauliGate, ZGate
+from qiskit.converters import circuit_to_dag
+from qiskit.quantum_info import Pauli
+
+LOGGER = logging.getLogger(__name__)
+
+
+class LightCone(NamedTuple):
+    # NOTE: we are not using Qiskit's LightCone transpiler pass because we want to leverage the
+    # iterative nature of the circuit processing, allowing us to add the circuit instructions to the
+    # light cone one at a time. However, transpiler passes are (by design) stateless and, thus,
+    # cannot support such an iterative processing. Furthermore, we want to avoid back-and-forth
+    # conversions of our QuantumCircuit and a DAGCircuit.
+    """A stateful light cone, grown one circuit instruction at a time.
+
+    :func:`.compute_bounds` uses a light cone to skip work: while iterating a circuit, any
+    instruction that :meth:`commutes` with the light cone cannot affect what is being bounded, and
+    any instruction that does not commute is added to it, widening the cone.
+
+    The light cone is *seeded* with the operator that the error terms are bounded against. The two
+    classmethods cover the cases of the built-in bounds: :meth:`initialize_from_pauli` seeds it with
+    a Pauli observable, as :func:`.compute_forward_bounds` does, and
+    :meth:`initialize_from_measurements` seeds it with a set of qubits, such as every active qubit of
+    the circuit, as :func:`.compute_backward_bounds` does. To bound against anything else, construct
+    it directly from the qubits it spans and the operations it starts out with, and an empty
+    :attr:`offset_cache`.
+
+    .. caution::
+       A light cone is mutated by :meth:`commutes`, so a fresh one is needed for every call to
+       :func:`.compute_bounds`.
+    """
+
+    qubits: set[Qubit]
+    """The qubits spanned by the light cone."""
+
+    operations: list[tuple[Gate, list[Qubit]]]
+    """The operations contained in the light cone."""
+
+    offset_cache: dict[tuple[str, tuple[float], tuple[Qubit]], int]
+    """A cache mapping circuit instructions to the offset in :attr:`.operations` up to which they
+    commute."""
+
+    def commutes(self, inst: CircuitInstruction) -> bool:
+        """Checks whether the provided instruction commutes with this light cone.
+
+        If it does not, the instruction gets added to this light cone.
+
+        Args:
+            inst: the circuit instruction to check.
+
+        Returns:
+            Whether the instruction commutes with this light cone.
+        """
+        # Check if the node belongs to the light-cone
+        if not self.qubits.intersection(inst.qubits):
+            return True
+
+        cache_key = (inst.operation.name, tuple(inst.operation.params), inst.qubits)
+        offset = self.offset_cache.get(cache_key, 0)
+
+        commutes_bool = True
+        # Check commutation with all previous operations
+        for op_idx, op in enumerate(self.operations[offset:]):  # noqa: B007
+            if op[0].name == "pauli":
+                # PERF: When the operation stored inside the LightCone is a Pauli, we know how to
+                # reduce its size to consider only those qubits that actually overlap with the
+                # (presumably) low-qubit-count gate (here, the input `inst`). This allows us to make
+                # much more efficient commutation checks.
+                reduced_pauli = []
+                reduced_qubits = []
+                for pauli, qb in zip(op[0].params[0], op[1][::-1], strict=True):
+                    if qb in inst.qubits:
+                        reduced_pauli.append(pauli)
+                        reduced_qubits.append(qb)
+
+                reduced_inst = PauliGate("".join(reduced_pauli))
+                op = (reduced_inst, reduced_qubits[::-1])
+
+            max_num_qubits = max(len(op[1]), len(inst.qubits))
+            if max_num_qubits > 10:
+                LOGGER.warning(
+                    f"Checking commutation of operators of size {max_num_qubits}."
+                    "This operation can be slow."
+                )
+            commute_bool = scc.commute(
+                op[0],
+                op[1],
+                [],
+                inst.operation,
+                inst.qubits,
+                [],
+                max_num_qubits=max_num_qubits,
+            )
+            if not commute_bool:
+                # If the current node does not commute, update the light-cone
+                self.qubits.update(inst.qubits)
+                self.operations.append((inst.operation, inst.qubits))
+                commutes_bool = False
+                break
+
+        self.offset_cache[cache_key] = op_idx + offset
+
+        return commutes_bool
+
+    @classmethod
+    def initialize_from_pauli(cls, circuit: QuantumCircuit, pauli: Pauli) -> Self:
+        """Initialize a LightCone assuming the given pauli is measured on the given circuit.
+
+        Args:
+            circuit: the QuantumCircuit for which to initialize the LightCone.
+            pauli: the Pauli to be measured.
+
+        Returns:
+            An empty LightCone initialized with the provided pauli measured on the circuit.
+        """
+        mask = pauli.z | pauli.x
+        indices = list(np.where(mask)[0])
+        bit_terms = str(pauli[mask])
+        qargs = [circuit.qubits[i] for i in indices]
+
+        return cls(set(qargs), [(PauliGate(bit_terms), qargs)], {})
+
+    @classmethod
+    def initialize_from_measurements(
+        cls,
+        circuit: QuantumCircuit,
+        *,
+        measure_active: bool = False,
+        measure_all: bool = False,
+    ) -> Self:
+        """Initialize a LightCone using the measurement gates inside the circuit.
+
+        Args:
+            circuit: the QuantumCircuit for which to initialize the LightCone.
+            measure_active: ignore any measurement information from the circuit and simply assume
+                all non-idle qubits to be measured.
+            measure_all: ignore any measurement information from the circuit and simply assume all
+                qubits to be measured. This takes precedence over ``measure_active``.
+
+        Returns:
+            An empty LightCone initialized with the to-be-measured qubits.
+        """
+        if measure_all:
+            qargs = circuit.qubits
+        elif measure_active:
+            dag = circuit_to_dag(circuit)
+            qargs = [qubit for qubit in circuit.qubits if qubit not in dag.idle_wires()]
+        else:
+            raise NotImplementedError
+
+        return cls(set(qargs), [(ZGate(), [idx]) for idx in qargs], {})

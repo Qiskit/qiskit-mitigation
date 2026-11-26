@@ -21,3 +21,7 @@
    qiskit_mitigation.utils
    qiskit_mitigation.postselection
    qiskit_mitigation.postselection.passes
+   qiskit_mitigation.slc.bounds
+   qiskit_mitigation.slc.globals
+   qiskit_mitigation.slc.utils
+   qiskit_mitigation.slc.visualization
