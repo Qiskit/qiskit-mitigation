@@ -562,7 +562,10 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         meas_qubits_list = meas_qubits_list or [None] * len(circuits)
         cal_qubits = TREX._calibration_qubits(circuits, meas_qubits_list)
         boxed = trex._prepare_calibration_circuit(
-            max(cal_qubits) + 1, options, cal_qubits, disable_measure_noise_injection=True
+            max(circuit.num_qubits for circuit in circuits),
+            options,
+            cal_qubits,
+            disable_measure_noise_injection = True,
         )
         return find_unique_box_instructions(
             instructions=boxed, normalize_annotations=None, undress_boxes=True
@@ -644,6 +647,18 @@ class TestFindCombinedUniqueLayersWithMitigationTypes(unittest.TestCase):
         self.assertIn(calibration, layers)
         measures = [op for op in calibration.operation.body.data if op.operation.name == "measure"]
         self.assertEqual(len(measures), 2)
+
+    def test_trex_true_calibration_layer_acts_on_the_qubits_of_the_circuits(self):
+        """The calibration layer acts on the qubits of the circuits even when they are wider than
+        the highest measured qubit."""
+        circuit = QuantumCircuit(5)
+        circuit.cx(1, 2)
+        layers = find_combined_unique_layers(
+            [circuit], box_types="measurement", observables=[[SparsePauliOp("IIZZI")]], trex=True
+        )
+        self.assertEqual(len(layers), 2)
+        for layer in layers:
+            self.assertLessEqual(set(layer.qubits), set(circuit.qubits))
 
     def test_trex_true_gives_all_the_noise_layers_needed_by_pec_prepare(self):
         """With noise injection on all the boxes, every layer ``PEC.prepare`` needs is returned,
