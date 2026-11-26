@@ -25,9 +25,10 @@ from qiskit.exceptions import MissingOptionalLibraryError
 from qiskit.primitives import PubResult
 from qiskit.primitives.containers.observables_array import ObservablesArray
 from qiskit.quantum_info import Pauli, PauliLindbladMap, SparsePauliOp
-from qiskit.transpiler import CouplingMap
+from qiskit.transpiler import CouplingMap, PassManager
 from qiskit_mitigation.mitigation_task import MitigationTask
 from qiskit_mitigation.pec import HAS_SLC, PEC
+from qiskit_mitigation.postselection.passes import AddPostCircuitNonMarkovianErrorChecks
 from qiskit_mitigation.trex import TREX
 from samplomatic import InjectNoise
 from samplomatic.quantum_program import QuantumProgram
@@ -590,6 +591,25 @@ class TestComputeExpectationValuePEC(unittest.TestCase):
         )
         self.assertIsInstance(result, PubResult)
 
+    def test_compute_expectation_value_pec_with_postselect_mask_function(self):
+        """``compute_expectation_value_pec`` with ``postselect_mask_function``."""
+        data = np.array([[[[False], [True], [False], [True]]]], dtype=bool)  # shape (1, 1, 4, 1)
+        pec_signs = np.zeros((1, 1, 0), dtype=bool)
+        item_result = {"_meas": data, "pauli_signs": pec_signs}
+
+        def mask_fn(_res):
+            return np.array([[[True, False, True, False]]])
+
+        pub_result = PEC.compute_expectation_value_pec(
+            item_result,
+            observables=[SparsePauliOp("Z")],
+            gamma=1.0,
+            broadcast_obs_and_params=False,
+            meas_bases=[Pauli("Z")],
+            postselect_mask_function=mask_fn,
+        )
+        np.testing.assert_allclose(pub_result.data.evs, 1.0)
+
 
 # ---------------------------------------------------------------------------
 # PEC._process_broadcasted_expectation_values_pec  (static method)
@@ -824,6 +844,19 @@ class TestPECPrepare(unittest.TestCase):
         self.assertIsInstance(program, QuantumProgram)
         self.assertEqual(len(program.items), 1)
 
+    def test_prepare_with_pass_manager(self):
+        """Passing ``pass_manager`` to ``prepare`` should run it on the template circuit."""
+        pec = PEC()
+        qc = _simple_circuit()
+        obs = [SparsePauliOp("ZZ")]
+        noise_map = self._noise_maps_for_circuit(qc)
+        pm = PassManager([AddPostCircuitNonMarkovianErrorChecks(x_pulse_type="rx")])
+        program = pec.prepare(qc, obs, parameters=None, pass_manager=pm, noise_maps=noise_map)
+        template_circuit = program.items[0].circuit
+        reg_names = [reg.name for reg in template_circuit.cregs]
+        self.assertIn("_meas", reg_names)
+        self.assertIn("_meas_ps", reg_names)
+
     def test_gamma_set_after_prepare(self):
         """``pec.gamma`` must be set after :meth:`prepare`."""
         pec = PEC()
@@ -1021,6 +1054,39 @@ class TestPECPostprocess(unittest.TestCase):
         }
         result = pec.postprocess(item_result)
         self.assertIsInstance(result, PubResult)
+
+    def test_postprocess_with_postselect_mask_function(self):
+        """``postprocess`` forwards ``postselect_mask_function`` properly."""
+        pec = PEC()
+        qc = _simple_circuit()
+        obs = [SparsePauliOp("ZZ")]
+        noise_map = self._noise_maps_for_circuit(qc)
+        pec.prepare(qc, obs, parameters=None, noise_maps=noise_map)
+
+        data = np.array(
+            [
+                [
+                    [
+                        [False, False],
+                        [True, False],
+                        [False, False],
+                        [True, False],
+                    ]
+                ]
+            ],
+            dtype=bool,
+        )
+        pec_signs = np.zeros((1, 1, 0), dtype=bool)
+        item_result = {
+            "_meas": data,
+            "pauli_signs": pec_signs,
+        }
+
+        def mask_fn(_res):
+            return np.array([[[True, False, True, False]]])
+
+        result = pec.postprocess(item_result, postselect_mask_function=mask_fn)
+        np.testing.assert_allclose(result.data.evs, [1.0])
 
     def test_postprocess_unsupported_version_raises(self):
         """``postprocess`` must raise ValueError when task VERSION is unsupported."""

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import copy
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any, Literal
 
 import numpy as np
@@ -31,7 +31,7 @@ from qiskit.quantum_info import (
     QubitSparsePauliList,
     SparsePauliOp,
 )
-from qiskit.transpiler import CouplingMap
+from qiskit.transpiler import CouplingMap, PassManager
 from qiskit.utils import LazyImportTester
 from samplomatic import InjectNoise, build
 from samplomatic.quantum_program import (
@@ -177,6 +177,7 @@ class PEC(MitigationTask):
         trex: TREX | None = None,
         quantum_program: QuantumProgram | None = None,
         trim_measurements: bool = False,
+        pass_manager: PassManager | None = None,
         *,
         noise_maps: dict[str, PauliLindbladMap] | None = None,
         scale_randomizations_by_gamma: bool = True,
@@ -196,6 +197,9 @@ class PEC(MitigationTask):
         of the observables. Otherwise, every parameter will be executed for each observable (outer
         product of the parameters and observables). Note that the post-processing of an outer
         product is usually faster.
+        If a ``pass_manager`` is provided, it is executed on the template circuit after boxing and
+        building the template circuit, and the transpiled circuit is used as the template in the
+        created program item.
 
         Args:
             circuit: The quantum circuit.
@@ -217,6 +221,10 @@ class PEC(MitigationTask):
                     (:func:`~qiskit_mitigation.find_combined_unique_layers` or
                     :meth:`~qiskit_mitigation.MitigationTask.find_unique_layers`) if and only if
                     ``trim_measurements=True`` is passed to ``prepare``, and pass the same observables.
+            pass_manager: A pass manager to transpile the template circuit created for the
+                quantum program. Note that this pass manager runs on the circuit **after** boxing
+                and building the template circuit. If ``None``, no transpilation is applied to the
+                template circuit.
             noise_maps: A mapping between layer ref to a noise model to use for PEC mitigation
                 method. The dict might contain layers not present in the given circuit, but must contain all
                 the mitigated layers. Assumes that the unique layers used for noise learning were extracted
@@ -273,6 +281,8 @@ class PEC(MitigationTask):
         self.boxed_circuit = boxed_circuit
         # Build the template and the samplex
         template, samplex = build(boxed_circuit)
+        if pass_manager is not None:
+            template = self._run_pass_manager(template, pass_manager)
 
         # Prepare samplex_arguments
         samplex_arguments, shape = self._create_samplex_arguments(samplex, boxed_circuit)
@@ -425,6 +435,7 @@ class PEC(MitigationTask):
         self,
         results: QuantumProgramItemResult | QuantumProgramResult,
         measure_noise_data: PauliLindbladMap | np.ndarray | None = None,
+        postselect_mask_function: Callable[[QuantumProgramItemResult], np.ndarray] | None = None,
     ) -> PubResult:
         """Process expectation values for a single pec mitigated item result.
 
@@ -433,6 +444,8 @@ class PEC(MitigationTask):
                 If TREX calibration task is added to the quantum program, its results will be used to compute the measure noise data if the entire results object is provided.
             measure_noise_data: The learned measurement noise data to use for TREX mitigation.
                 If `None` and a calibration task is present the quantum program, the measure noise will be computed from the calibration task results if the entire results object is provided.
+            postselect_mask_function: A function that computes a postselection mask from the item result,
+                used to filter shots from the result. For example, :meth:`.PostSelector.compute_mask`.
 
         Returns:
             A PubResult which contains ``evs`` and ``std`` as fields in its data, where ``evs`` are expectation values,
@@ -464,6 +477,7 @@ class PEC(MitigationTask):
             measure_noise_data=measure_noise_data,
             meas_qubits=self.meas_qubits,
             circuit_num_qubits=self.circuit_num_qubits,
+            postselect_mask_function=postselect_mask_function,
         )
 
     def _validate_slc_settings(
@@ -717,6 +731,7 @@ class PEC(MitigationTask):
         pec_gamma: float,
         pec_signs: np.ndarray,
         trex_scale_factors: dict[str, float] | None = None,
+        postselect_mask: np.ndarray | None = None,
     ) -> tuple[
         np.typing.NDArray[np.float64], np.typing.NDArray[np.float64], np.typing.NDArray[np.float64]
     ]:
@@ -734,6 +749,7 @@ class PEC(MitigationTask):
             pec_signs: A boolean array indicating for each randomization, for each noise term whether
                 it was injected in this randomizationsigns for PEC mitigation.
             trex_scale_factors: A dictionary mapping each observable term to its scale factor for TREX mitigation.
+            postselect_mask: A boolean mask indicating which shots to keep or discard.
 
         Returns:
             A tuple ``(exp_vals, stds, ensemble_stds)``, where ``exp_vals`` are expectation values,
@@ -805,9 +821,10 @@ class PEC(MitigationTask):
                 # Get measurement data for this configuration
                 # Shape: (num_randomizations, shots, num_qubits)
                 datum = data[:, config_idx, :, :]
+                mask = postselect_mask[:, config_idx, :] if postselect_mask is not None else None
                 term_exp_val, term_ensemble_variance, term_twirl_variance = (
                     _compute_single_term_exp_val_with_twirl_variance(
-                        observable_term, datum, pec_signs_datum
+                        observable_term, datum, pec_signs_datum, postselect_mask=mask
                     )
                 )
 
@@ -816,13 +833,22 @@ class PEC(MitigationTask):
                     trex_scale_factors[observable_term] if trex_scale_factors is not None else 1
                 )
 
+                term_shots = np.sum(mask) if mask is not None else total_shots
+
                 # Accumulate with coefficient
                 exp_val += coeff * term_exp_val * term_scale_factor
-                ensemble_variance += (coeff**2) * term_ensemble_variance * term_scale_factor**2
+                term_ensemble_var = (
+                    (coeff**2)
+                    * (term_ensemble_variance * pec_gamma**2 / term_shots)
+                    * (term_scale_factor**2)
+                    if term_shots > 0
+                    else np.nan
+                )
+                ensemble_variance += term_ensemble_var
                 twirl_variance += (coeff**2) * term_twirl_variance * term_scale_factor**2
 
             exp_vals[bcast_index] = exp_val * pec_gamma
-            ensemble_stds[bcast_index] = np.sqrt(ensemble_variance * pec_gamma**2 / total_shots)
+            ensemble_stds[bcast_index] = np.sqrt(ensemble_variance)
             if num_randomizations == 1:
                 stds[bcast_index] = ensemble_stds[bcast_index]
             else:
@@ -895,6 +921,7 @@ class PEC(MitigationTask):
         measure_noise_data: PauliLindbladMap | np.ndarray | None = None,
         meas_qubits: list[int] | None = None,
         circuit_num_qubits: int | None = None,
+        postselect_mask_function: Callable[[QuantumProgramItemResult], np.ndarray] | None = None,
     ) -> PubResult:
         """Process expectation values for a single pec mitigated item result.
 
@@ -917,6 +944,8 @@ class PEC(MitigationTask):
             circuit_num_qubits: The total number of qubits in the circuit. Used together with
                 ``meas_qubits`` to expand the data back to the full width. Must be given together
                 with ``meas_qubits``.
+            postselect_mask_function: A function that computes a postselection mask from the item result,
+                used to filter shots from the result. For example, :meth:`.PostSelector.compute_mask`.
 
         Returns:
             A PubResult which contains ``evs`` and ``std`` as fields in its data, where ``evs`` are expectation values,
@@ -942,6 +971,10 @@ class PEC(MitigationTask):
         # indices without any remapping.
         data = _expand_meas_data_and_apply_flips(
             data, item_result.get("measurement_flips._meas", None), meas_qubits, circuit_num_qubits
+        )
+
+        postselect_mask = (
+            postselect_mask_function(item_result) if postselect_mask_function is not None else None
         )
 
         # extract pec_old signs if present
@@ -984,6 +1017,7 @@ class PEC(MitigationTask):
                 gamma,
                 pec_signs,
                 trex_scale_factors,
+                postselect_mask=postselect_mask,
             )
             data_bin = DataBin(
                 evs=exp_vals, stds=ensemble_stds, twirl_stds=twirl_stds, shape=exp_vals.shape
@@ -1015,6 +1049,7 @@ class PEC(MitigationTask):
             pauli_signs=pec_signs,
             gamma_factor=gamma,
             rescale_factors=trex_scale_factors,
+            postselect_mask=postselect_mask,
         )
 
         exp_vals, ensemble_stds = (np.array(x) for x in zip(*exp_val_and_std, strict=True))

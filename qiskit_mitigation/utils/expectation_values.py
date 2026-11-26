@@ -660,7 +660,10 @@ def _project_to_z(term: str) -> np.ndarray:
 
 
 def _compute_single_term_exp_val_with_twirl_variance(
-    observable_term: str, datum: np.ndarray, signs: np.ndarray | None = None
+    observable_term: str,
+    datum: np.ndarray,
+    signs: np.ndarray | None = None,
+    postselect_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Compute expectation value and variances of an observable term from measurement data.
 
@@ -671,6 +674,8 @@ def _compute_single_term_exp_val_with_twirl_variance(
         signs: Optional boolean array used with probabilistic error cancellation (PEC). Indicates
             which errors were inserted in each circuit randomization, shape
              (num_randomizations, error_generators_indicators)
+        postselect_mask: Optional boolean array used for postselection. Shape must broadcast to
+            (num_randomizations, shots_per_randomization).
 
     Returns:
         Tuple of (expectation_value, ensemble_variance, twirl_variance):
@@ -714,16 +719,24 @@ def _compute_single_term_exp_val_with_twirl_variance(
     # evals shape: (num_randomizations, shots_per_randomization)
     # evals contains expectation values for each shot (may be 0 for filtered shots)
     num_randomizations = datum.shape[0]
-    shots_per_randomization = datum.shape[-2]
-    total_shots = num_randomizations * shots_per_randomization
 
-    # Compute overall expectation value (mean across all shots)
-    exp_val = np.sum(evals) / total_shots
+    # Without postselection, all shots are kept
+    if postselect_mask is None:
+        postselect_mask = np.ones(evals.shape, dtype=bool)
+    else:
+        postselect_mask = np.broadcast_to(postselect_mask, evals.shape)
 
-    # Compute ensemble variance: treating all shots as a single ensemble
+    total_shots = int(np.sum(postselect_mask))
+    if total_shots == 0:
+        return np.asarray(np.nan), np.asarray(np.nan), np.asarray(np.nan)
+
+    # Compute overall expectation value (mean across all kept shots)
+    evals_kept = evals[postselect_mask]
+    exp_val = np.sum(evals_kept) / total_shots
+
+    # Compute ensemble variance: treating all kept shots as a single ensemble
     # variance = E[X²] - E[X]²
-    evals_squared = evals**2
-    mean_squared = np.sum(evals_squared) / total_shots
+    mean_squared = np.sum(evals_kept**2) / total_shots
     ensemble_variance = mean_squared - exp_val**2
 
     # Compute twirl variance: variance of expectation values across twirls
@@ -732,13 +745,17 @@ def _compute_single_term_exp_val_with_twirl_variance(
     if num_randomizations == 1:
         twirl_variance = ensemble_variance
     else:
-        # For each twirl (randomization), compute the expectation value
-        # Must normalize by shots_per_randomization (not actual count) to handle filtered shots
-        # Compute variance of these per-twirl expectation values
-        twirl_exp_vals = (
-            np.sum(evals, axis=-1) / shots_per_randomization
+        # For each twirl (randomization), compute the expectation value over its kept shots.
+        # Twirls with no kept shots yield NaN and are ignored by nanvar.
+        shots_kept_per_rand = np.sum(postselect_mask, axis=-1)
+        sums_per_rand = np.sum(np.where(postselect_mask, evals, 0), axis=-1)
+        twirl_exp_vals = np.divide(
+            sums_per_rand,
+            shots_kept_per_rand,
+            out=np.full(num_randomizations, np.nan),
+            where=shots_kept_per_rand > 0,
         )  # Shape: (num_randomizations,)
-        twirl_variance = np.var(twirl_exp_vals, ddof=0)
+        twirl_variance = np.nanvar(twirl_exp_vals, ddof=0)
 
     # Ensure we always return numpy arrays (even for scalar results)
     return np.asarray(exp_val), np.asarray(ensemble_variance), np.asarray(twirl_variance)
